@@ -1,0 +1,49 @@
+name: Mix Sheet Automation
+
+on:
+  schedule:
+    # 16:00 UTC = 10am MDT (Mountain Daylight Time). This is a fixed UTC time, so during
+    # Mountain Standard Time (winter, UTC-7) this actually runs at 9am local - accepted
+    # as fine per the team, not worth the complexity of a DST-aware dual-schedule.
+    # Day-of-week: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat - Monday (1) is skipped
+    # because the business doesn't run Sundays, so there's nothing for Monday to record.
+    - cron: '0 16 * * 0,2,3,4,5,6'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Scrape and compute everything but skip writing to the sheet'
+        type: boolean
+        default: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - name: Write service account key
+        run: echo '${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY_JSON }}' > service-account-key.json
+
+      - name: Run automation
+        env:
+          SA_EMAIL: ${{ secrets.SA_EMAIL }}
+          SA_PASSWORD: ${{ secrets.SA_PASSWORD }}
+          GOOGLE_SERVICE_ACCOUNT_KEY_PATH: ./service-account-key.json
+          MIX_SHEETS_FOLDER_ID: 1KsCqKKnZOTAJbkXRf80ZT1JLF3ul-pzN
+          BUSINESS_TIMEZONE: America/Denver
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          HEADLESS: 'true'
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: '587'
+          SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          NOTIFY_EMAIL_TO: omega@kudos.marketing
+        run: npm start
