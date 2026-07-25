@@ -169,3 +169,26 @@ Roughly in order of how likely each is to actually break something:
 
 `SA_PASSWORD` and the service account key are read from `.env` / the JSON key file - never
 hardcoded in source. Keep both out of version control.
+
+## Running on a schedule (GitHub Actions)
+
+`.github/workflows/mix-sheet-automation.yml` runs this automatically at 16:00 UTC (10am
+MDT) every day except Monday - the business doesn't run Sundays, so there'd be nothing for
+a Monday run to record. This is a fixed UTC time, not DST-aware, so it drifts to 9am local
+during Mountain Standard Time (winter) - accepted as fine rather than adding a second
+DST-aware schedule. It can also be triggered manually from the **Actions** tab (with an
+optional dry-run checkbox) for testing.
+
+The workflow reads everything from **repository secrets** rather than committing `.env` -
+add these under **Settings > Secrets and variables > Actions > New repository secret**:
+
+| Secret name | Value |
+| --- | --- |
+| `SA_EMAIL` | Service Autopilot login email |
+| `SA_PASSWORD` | Service Autopilot login password |
+| `GOOGLE_SERVICE_ACCOUNT_KEY_JSON` | The **entire contents** of `service-account-key.json`, pasted as-is (it's valid JSON, the workflow writes it straight to a file) |
+| `SMTP_FROM_EMAIL` | The Gmail account sending the audit emails |
+| `SMTP_APP_PASSWORD` | That account's 16-character Gmail App Password |
+
+Everything else (folder ID, timezone, notify-to address, SMTP host/port) is non-sensitive
+and hardcoded directly in the workflow file - edit it there if any of those change.
