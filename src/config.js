@@ -20,6 +20,11 @@ const TECHS = [
 //     Flower Bed Pre-Emergent, and incidentally non-turf admin jobs like "Clean Van" /
 //     "Truck Unload" - those are harmless no-ops since their CustomField1 is blank).
 //   - Reduce "lawn fert 1 of 7" / "lawn fert 2 of 7" ONLY if the note mentions spring seeding.
+//   - ALWAYS reduce if the Service name contains "free" - this takes priority over the
+//     "fert" exclusion below. Needed because some free follow-up services are catalogued
+//     under a category label that itself contains "fert" (e.g. "Lawn Fertilizing & Weed
+//     Control:Free Follow Up Weed Control"), which would otherwise be wrongly kept in the
+//     total just because of the category prefix, not the actual service performed.
 //   - Never reduce any other service containing "fert" (regular Lawn fert 3-7 of 7,
 //     Fert/Pest combos, Fert/Pest/Bait combos, etc).
 const SPRING_SEEDING_FERT_VISITS = ['lawn fert 1 of 7', 'lawn fert 2 of 7'];
@@ -33,6 +38,8 @@ function shouldReduceJob(serviceName, schedulingNote) {
   if (seedingVisit) {
     return note.includes(SPRING_SEEDING_NOTE_PHRASE);
   }
+
+  if (svc.includes('free')) return true;
 
   return !svc.includes('fert');
 }

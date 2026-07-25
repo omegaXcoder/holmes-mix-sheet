@@ -126,7 +126,10 @@ Roughly in order of how likely each is to actually break something:
 1. **Saved filter names in SA.** `AUTOMATION - mix sheet review - <Tech>` must exist under
    that exact name for each tech. If renamed/deleted, that tech's run hangs waiting for the
    filter option to appear (10s timeout, then throws).
-2. **Service name matching.** Reduction logic is "no 'fert' in the name -> reduce" plus a
+2. **Service name matching.** Reduction logic is "no 'fert' in the name -> reduce", with
+   "contains 'free'" always overriding that to reduce regardless (needed because some free
+   follow-up services are catalogued under a category label that itself contains "fert",
+   e.g. "Lawn Fertilizing & Weed Control:Free Follow Up Weed Control"), plus a
    spring-seeding-note carve-out for lawn fert 1-2 of 7 (see `src/config.js` for the full
    reasoning). If Service Autopilot service names change, this may over- or under-reduce
    silently - there's no built-in alerting for "this service name looks new/unexpected."
