@@ -190,5 +190,14 @@ add these under **Settings > Secrets and variables > Actions > New repository se
 | `SMTP_FROM_EMAIL` | The Gmail account sending the audit emails |
 | `SMTP_APP_PASSWORD` | That account's 16-character Gmail App Password |
 
+To skip clicking through the UI five times, `scripts/upload-secrets.ps1` reads these
+straight out of your local `.env` and `service-account-key.json` and uploads them via `gh
+secret set`. Requires the [GitHub CLI](https://cli.github.com/) installed and
+`gh auth login` run once first. Then, from the project folder:
+
+```powershell
+.\scripts\upload-secrets.ps1
+```
+
 Everything else (folder ID, timezone, notify-to address, SMTP host/port) is non-sensitive
 and hardcoded directly in the workflow file - edit it there if any of those change.
