@@ -4,10 +4,14 @@
 //  1. The saved filter names ("AUTOMATION - mix sheet review - <Tech>") must exist and
 //     match exactly (case-sensitive as typed in SA) - if someone renames/deletes one of
 //     these saved views, that tech's run will time out waiting for the filter to appear.
-//  2. This is a Knockout.js SPA panel, not classic postbacks - after every filter/date
-//     change we wait on the "N Jobs Total" header text actually changing, since there's
-//     no full page navigation to wait on. If SA changes that header's wording this wait
-//     needs updating.
+//  2. This is a Knockout.js SPA panel, not classic postbacks - after selecting a filter or
+//     date we verify the filter title / date box actually reflect the new selection before
+//     proceeding (not just "did something change"), because a click can silently fail to
+//     register (observed live) and leave the grid showing a DIFFERENT tech's or day's data
+//     with no error. That happened for real: a Harris->Nate filter switch silently failed
+//     and Nate's row got written with Harris's numbers. Both checks now throw loudly
+//     instead of swallowing the timeout. If SA changes the "N Jobs Total" header wording
+//     this final readiness wait needs updating too.
 //  3. The date-range widget renders TWO copies of itself in the DOM (a live one and a
 //     hidden dialog-only one) - every selector below is scoped to #drpMain and/or uses
 //     Playwright's :visible pseudo-class to avoid grabbing the hidden copy.
@@ -31,35 +35,37 @@ async function login(page, email, password) {
   ]);
 }
 
-async function getJobsTotalLabel(page) {
-  return page.locator('text=/^\\d+ Jobs Total$/').first().innerText();
-}
-
 async function selectSavedFilter(page, filterName) {
-  const before = await getJobsTotalLabel(page).catch(() => null);
-
   await page.locator('#screenViewTitleSpan').click();
   const item = page.locator('div.screenViewSelection', { hasText: filterName });
   await item.waitFor({ state: 'visible' });
   await item.click();
 
-  // Selecting a filter reloads the grid via AJAX - wait for the job count text to change
-  // (or simply appear, if this is the first filter selected this session) rather than
-  // waiting on network idle, since Knockout SPAs keep background polling alive.
-  await page.waitForFunction(
-    (prevText) => {
-      const el = Array.from(document.querySelectorAll('*')).find((e) =>
-        /^\d+ Jobs Total$/.test((e.textContent || '').trim())
+  // Verify the switch actually took effect by checking the filter title itself, NOT just
+  // "did the job count change" - a click that silently fails to register (observed live:
+  // clicking a filter item occasionally does nothing, for reasons not fully understood)
+  // otherwise leaves the PREVIOUS tech's filter applied, and the job count can legitimately
+  // differ day to day, so a changed count is not proof the right filter is now active. This
+  // bit us for real: a Harris->Nate switch silently failed and the script scraped Harris's
+  // data twice under Nate's name. Throwing here turns that into a loud, visible failure in
+  // the audit email instead of silently writing wrong numbers into the sheet.
+  await page
+    .locator('#screenViewTitleSpan', { hasText: filterName })
+    .waitFor({ state: 'visible', timeout: 15000 })
+    .catch(() => {
+      throw new Error(
+        `Filter switch to "${filterName}" did not take effect - the title still doesn't ` +
+          'match after 15s. The grid may still be showing a different technician\'s data.'
       );
-      return el && el.textContent.trim() !== prevText;
-    },
-    before,
+    });
+
+  // The grid itself reloads via AJAX after the title updates - give it a moment to finish
+  // rather than racing straight into reading rows.
+  await page.waitForFunction(
+    () => Array.from(document.querySelectorAll('*')).some((e) => /^\d+ Jobs Total$/.test((e.textContent || '').trim())),
+    null,
     { timeout: 15000 }
-  ).catch(() => {
-    // If the count happens to be numerically identical to the previous tech's count,
-    // this timeout is a false alarm - fall through and let downstream checks catch a
-    // genuinely stale grid instead of failing the whole run here.
-  });
+  );
 }
 
 // Selects the exact given calendar date as a single-day range (start === end) and applies
@@ -87,21 +93,34 @@ async function selectSingleDay(page, year, month1to12, day) {
   await cell.click(); // sets range start
   await cell.click(); // collapses range to a single day (start === end)
 
-  const before = await getJobsTotalLabel(page).catch(() => null);
   // Like the calendar cells above, this id is duplicated in the DOM (a hidden "Close"
   // copy alongside the live "Refresh" one) - scope to the visible one.
   await page.locator('#drpSaveButton:visible').first().click();
 
-  await page.waitForFunction(
-    (prevText) => {
-      const el = Array.from(document.querySelectorAll('*')).find((e) =>
-        /^\d+ Jobs Total$/.test((e.textContent || '').trim())
+  // Verify the date range box itself now shows the target date, rather than just waiting
+  // for the job count to change - the same silent-failure risk as the filter switch above
+  // (a click that doesn't register would otherwise leave the grid on the WRONG day with no
+  // error). This is a readonly input whose value is set via JS, not the HTML attribute, so
+  // it has to be read via the live DOM property (evaluate), not a CSS attribute selector.
+  const expected = `${String(month1to12).padStart(2, '0')}/${String(day).padStart(2, '0')}/${year}`;
+  await page
+    .waitForFunction(
+      (exp) => (document.getElementById('dispatchBoardDateRange')?.value || '').includes(exp),
+      expected,
+      { timeout: 15000 }
+    )
+    .catch(() => {
+      throw new Error(
+        `Date selection for ${expected} did not take effect - the date range box doesn't ` +
+          'show it after 15s. The grid may still be showing the wrong day.'
       );
-      return el && el.textContent.trim() !== prevText;
-    },
-    before,
+    });
+
+  await page.waitForFunction(
+    () => Array.from(document.querySelectorAll('*')).some((e) => /^\d+ Jobs Total$/.test((e.textContent || '').trim())),
+    null,
     { timeout: 15000 }
-  ).catch(() => {});
+  );
 }
 
 // Pulls every job row's Service name, turf sq ft (CustomField1), and scheduling note
@@ -129,6 +148,15 @@ async function extractJobRows(page) {
 
 async function getTechDayJobs(page, { filterName, year, month, day }) {
   await page.goto(DISPATCH_BOARD_URL);
+  // Let the default view finish its initial render before interacting - clicking the
+  // filter dropdown immediately after navigation occasionally hits "element is not
+  // stable" because the page is still settling (e.g. a survey banner appearing and
+  // shifting the layout right as the click lands).
+  await page.waitForFunction(
+    () => Array.from(document.querySelectorAll('*')).some((e) => /^\d+ Jobs Total$/.test((e.textContent || '').trim())),
+    null,
+    { timeout: 30000 }
+  );
   await selectSavedFilter(page, filterName);
   await selectSingleDay(page, year, month, day);
   return extractJobRows(page);
