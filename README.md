@@ -49,8 +49,24 @@ Fill in `.env`:
 - `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` - path to the JSON key from step 2.
 - `MIX_SHEETS_FOLDER_ID` - already filled in from the folder link you gave; change it if
   the folder moves.
+- `MIX_SHEET_TEMPLATE_ID` - already filled in, pointing at "NEW MASTER 2026 FILL SHEET" in
+  the Mix Sheets folder. See "Automatic monthly sheet creation" below.
 - `SMTP_FROM_EMAIL` / `SMTP_APP_PASSWORD` / `NOTIFY_EMAIL_TO` - see "Email notifications"
   below.
+
+### 3a. Automatic monthly sheet creation
+
+If this month's spreadsheet doesn't exist yet in its year folder (e.g. the first run of a
+new month, or the automation failed for a stretch because nobody created it - this
+happened for August 2026), the script duplicates `MIX_SHEET_TEMPLATE_ID`, names the copy
+to match the existing convention (e.g. "AUGUST 2026 Mix Sheet"), places it in the correct
+year folder, and deletes the template's placeholder "BLANK" tab from the copy. This is
+logged and called out in the summary email so it doesn't happen silently.
+
+This only creates the spreadsheet itself, not a missing *year* folder (e.g. January 2027)
+- that edge case still throws and needs a human, since it hasn't come up yet. It also still
+throws if more than one spreadsheet matches the target month (e.g. a stray duplicate) -
+that's ambiguous and needs a human to resolve, same as before.
 
 ### 3b. Email notifications
 
@@ -143,9 +159,10 @@ Roughly in order of how likely each is to actually break something:
    itself (used for an edit-row dialog elsewhere on the page). Every date selector is scoped
    to `#drpMain` and/or `:visible` to avoid grabbing the wrong copy - if SA adds a third
    copy or changes the wrapper ID, this needs revisiting.
-6. **Spreadsheet-per-month lookup.** If next month's spreadsheet doesn't exist yet in the
-   Drive folder when this runs (e.g. run right at midnight on the 1st before someone's
-   created it), `findMonthlySpreadsheetId` throws rather than creating one.
+6. **Spreadsheet-per-month lookup.** `ensureMonthlySpreadsheet` creates the month's
+   spreadsheet from the template if it's missing (see "Automatic monthly sheet creation"
+   above), but still throws if the *year* folder is missing (e.g. no "Mix Sheets 27'"
+   folder exists yet come January 2027) or if more than one file matches the target month.
 7. **ASP.NET WebForms login.** Login is a classic full-postback form; everything after is
    an AJAX SPA. If SA changes the login page to also be SPA-driven, the
    `waitForNavigation` after clicking Login will need to become a different wait strategy.

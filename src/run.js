@@ -7,7 +7,7 @@ const { login, getTechDayJobs } = require('./serviceAutopilot');
 const {
   getAuth,
   findYearSubfolderId,
-  findMonthlySpreadsheetId,
+  ensureMonthlySpreadsheet,
   findSheetTabTitle,
   writeCellValue,
 } = require('./googleSheets');
@@ -91,6 +91,7 @@ async function main() {
   const SA_PASSWORD = requireEnv('SA_PASSWORD');
   const keyPath = requireEnv('GOOGLE_SERVICE_ACCOUNT_KEY_PATH');
   const folderId = requireEnv('MIX_SHEETS_FOLDER_ID');
+  const templateId = requireEnv('MIX_SHEET_TEMPLATE_ID');
   const timeZone = process.env.BUSINESS_TIMEZONE || 'America/Denver';
   const dryRun = process.env.DRY_RUN === 'true';
   const headless = process.env.HEADLESS !== 'false';
@@ -98,6 +99,7 @@ async function main() {
   let target;
   let techResults = [];
   let fatalError = null;
+  let createdSpreadsheetName = null;
 
   try {
     target = computeMixSheetTarget(new Date(), timeZone);
@@ -108,7 +110,16 @@ async function main() {
 
     const auth = getAuth(keyPath);
     const yearFolderId = await findYearSubfolderId(auth, folderId, target.yearShort);
-    const spreadsheetId = await findMonthlySpreadsheetId(auth, yearFolderId, target.spreadsheetNamePattern);
+    const { spreadsheetId, created } = await ensureMonthlySpreadsheet(auth, {
+      yearFolderId,
+      namePattern: target.spreadsheetNamePattern,
+      fileName: target.spreadsheetFileName,
+      templateId,
+    });
+    if (created) {
+      createdSpreadsheetName = target.spreadsheetFileName;
+      console.log(`Created "${target.spreadsheetFileName}" from the template (${spreadsheetId}).`);
+    }
     const sheetTitle = await findSheetTabTitle(auth, spreadsheetId, target.sheetTabNameNeedle);
     console.log(`Spreadsheet: ${spreadsheetId}, tab: "${sheetTitle}"`);
 
@@ -137,6 +148,7 @@ async function main() {
       dateLabel: target ? dateLabelFor(target) : new Date().toISOString().slice(0, 10),
       techResults,
       fatalError,
+      createdSpreadsheetName,
     });
     console.log(`\nSummary email sent to ${process.env.NOTIFY_EMAIL_TO}.`);
   } catch (emailError) {

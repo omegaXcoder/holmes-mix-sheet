@@ -72,6 +72,9 @@ function computeMixSheetTarget(now, timeZone) {
     yearShort: String(y).slice(-2),
     // e.g. "July 2026" - used to find the right monthly spreadsheet within that subfolder
     spreadsheetNamePattern: new RegExp(`${monthName}\\s+${y}`, 'i'),
+    // e.g. "JULY 2026 Mix Sheet" - matches the existing naming convention exactly, used as
+    // the file name if this month's spreadsheet has to be created from the template
+    spreadsheetFileName: `${monthName.toUpperCase()} ${y} Mix Sheet`,
     // e.g. "wk/4 mix" - used to find the right tab within that spreadsheet
     sheetTabNameNeedle: `wk/${weekNumber} mix`,
   };

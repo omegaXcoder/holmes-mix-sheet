@@ -23,7 +23,9 @@ function formatJob(job) {
 //   wrote, writeError } - one entry per technician this run attempted to process.
 // fatalError: set when the whole run failed before per-tech processing even started
 //   (e.g. login failed, spreadsheet not found).
-function buildEmail({ dateLabel, techResults, fatalError }) {
+// createdSpreadsheetName: set when this run had to auto-create the month's spreadsheet
+//   from the template because it didn't exist yet (e.g. first run of a new month).
+function buildEmail({ dateLabel, techResults, fatalError, createdSpreadsheetName }) {
   const anyTechFailed = techResults.some((r) => r.error || r.writeError);
   const success = !fatalError && techResults.length > 0 && !anyTechFailed;
   const subject = `Mix Sheet Automation - ${success ? 'SUCCESS' : 'FAILURE'} - ${dateLabel}`;
@@ -31,6 +33,11 @@ function buildEmail({ dateLabel, techResults, fatalError }) {
   const lines = [];
   lines.push(`Mix Sheet automation run for ${dateLabel}`);
   lines.push('');
+
+  if (createdSpreadsheetName) {
+    lines.push(`Note: "${createdSpreadsheetName}" didn't exist yet, so it was created from the template.`);
+    lines.push('');
+  }
 
   if (fatalError) {
     lines.push(`FATAL ERROR - run stopped before any technician was processed:`);
@@ -71,8 +78,8 @@ function buildEmail({ dateLabel, techResults, fatalError }) {
   return { subject, text: lines.join('\n') };
 }
 
-async function sendRunSummaryEmail({ dateLabel, techResults, fatalError }) {
-  const { subject, text } = buildEmail({ dateLabel, techResults, fatalError });
+async function sendRunSummaryEmail({ dateLabel, techResults, fatalError, createdSpreadsheetName }) {
+  const { subject, text } = buildEmail({ dateLabel, techResults, fatalError, createdSpreadsheetName });
   const transport = getTransport();
   await transport.sendMail({
     from: process.env.SMTP_FROM_EMAIL,
