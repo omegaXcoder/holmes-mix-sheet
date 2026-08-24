@@ -87,7 +87,8 @@ This is sent via Gmail SMTP with an App Password (not a full Google login):
    - `SMTP_FROM_EMAIL` - the account you just did this on.
    - `SMTP_APP_PASSWORD` - the 16-character password (this is NOT that account's normal
      login password - Gmail rejects normal passwords for SMTP).
-   - `NOTIFY_EMAIL_TO` - already defaulted to `omega@kudos.marketing`.
+   - `NOTIFY_EMAIL_TO` - already defaulted to `omega@kudos.marketing,madison@holmesutah.com`
+     (comma-separated for multiple recipients - nodemailer passes this straight through).
 
 A single tech failing (e.g. a saved filter got renamed) doesn't stop the other techs from
 being processed and written - the email will show that tech's error while still reporting

@@ -58,5 +58,5 @@ jobs:
           SMTP_PORT: '587'
           SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
           SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
-          NOTIFY_EMAIL_TO: omega@kudos.marketing
+          NOTIFY_EMAIL_TO: omega@kudos.marketing,madison@holmesutah.com
         run: npm start
