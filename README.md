@@ -184,6 +184,16 @@ Roughly in order of how likely each is to actually break something:
     `chrome.exe` - if it fails the same way, that's a machine-level issue to fix separately
     (try reinstalling the Visual C++ Redistributable, or `npx playwright install chromium
     --force`), not something to work around in code.
+11. **Intermittent "element is not stable/visible" on the very first interaction of a fresh
+    browser.** Only ever hit whichever tech runs first (always David, since `TECHS` order is
+    fixed), and never recurs later in the same run - looks tied to the browser having just
+    launched, but the exact root cause wasn't pinned down (tried waiting for the page's
+    initial render to settle first; that didn't fully fix it). Mitigated rather than fixed:
+    a tech whose scrape fails gets one retry, run after every other tech has gone (i.e.
+    genuinely not first anymore) instead of immediately - see `processTechs` in
+    `src/run.js`. Set `DEBUG_SCREENSHOTS=true` to dump a screenshot + the target element's
+    computed style/bounding box to `debug-screenshots/` the next time a filter-switch click
+    fails, if this needs deeper investigation later.
 
 ## Notes on credentials
 

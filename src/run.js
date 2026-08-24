@@ -37,50 +37,73 @@ function dateLabelFor(target) {
   return `${target.year}-${String(target.month).padStart(2, '0')}-${String(target.day).padStart(2, '0')}`;
 }
 
+// Scrapes + computes + (unless dryRun) writes for a single technician. Returns a result
+// object with `error` set if the scrape/compute step failed - never throws, so the caller
+// can decide what to do with a failure (record it, retry it, etc).
+async function processOneTech(page, target, tech, { auth, spreadsheetId, sheetTitle, dryRun }) {
+  console.log(`\n${tech.name} (${tech.code}) - loading ${dateLabelFor(target)}...`);
+  const row = target.row + tech.sheetRowOffset;
+  const cellRange = cellA1({ ...target, row }, sheetTitle);
+
+  let scraped;
+  try {
+    const jobs = await getTechDayJobs(page, {
+      filterName: tech.filterName,
+      year: target.year,
+      month: target.month,
+      day: target.day,
+    });
+    scraped = { jobs, ...computeReducedTotal(jobs) };
+    console.log(
+      `  ${scraped.jobs.length} jobs, raw total ${scraped.total.toFixed(2)}, reduced ` +
+        `${scraped.reduced.toFixed(2)} (${scraped.reductions.length} jobs), final ${scraped.finalTotal.toFixed(2)}`
+    );
+  } catch (error) {
+    console.error(`  FAILED to scrape/compute for ${tech.name}:`, error);
+    return { tech, row, cellRange, error };
+  }
+
+  const result = { tech, row, cellRange, ...scraped };
+  if (dryRun) {
+    console.log(`  [DRY RUN] would write ${scraped.finalTotal.toFixed(2)} to ${cellRange}`);
+  } else {
+    try {
+      await writeCellValue(auth, spreadsheetId, cellRange, scraped.finalTotal.toFixed(2));
+      result.wrote = true;
+      console.log(`  wrote ${scraped.finalTotal.toFixed(2)} to ${cellRange}`);
+    } catch (writeError) {
+      console.error(`  FAILED to write to ${cellRange}:`, writeError);
+      result.writeError = writeError;
+    }
+  }
+  return result;
+}
+
 // Processes every technician, tolerating a single tech's failure without aborting the
 // others - a bad scrape for one tech shouldn't block the rest from being recorded, and the
 // audit email needs to show exactly which tech(s) failed and why.
-async function processTechs(page, target, { auth, spreadsheetId, sheetTitle, dryRun }) {
+//
+// Whoever scrapes first hits an intermittent "element is not stable/visible" flake tied to
+// the browser having just launched (see serviceAutopilot.js) - couldn't pin down the exact
+// root cause, but every failure observed was specifically the FIRST interaction of a fresh
+// browser and never recurred later in the same run. So a scrape failure gets one retry,
+// run after every other tech has gone (i.e. definitely not first anymore) rather than
+// immediately - cheap mitigation for a flake we can't fully explain yet.
+async function processTechs(page, target, opts) {
   const techResults = [];
+  const retryQueue = [];
 
   for (const tech of TECHS) {
-    console.log(`\n${tech.name} (${tech.code}) - loading ${dateLabelFor(target)}...`);
-    const row = target.row + tech.sheetRowOffset;
-    const cellRange = cellA1({ ...target, row }, sheetTitle);
-
-    let scraped;
-    try {
-      const jobs = await getTechDayJobs(page, {
-        filterName: tech.filterName,
-        year: target.year,
-        month: target.month,
-        day: target.day,
-      });
-      scraped = { jobs, ...computeReducedTotal(jobs) };
-      console.log(
-        `  ${scraped.jobs.length} jobs, raw total ${scraped.total.toFixed(2)}, reduced ` +
-          `${scraped.reduced.toFixed(2)} (${scraped.reductions.length} jobs), final ${scraped.finalTotal.toFixed(2)}`
-      );
-    } catch (error) {
-      console.error(`  FAILED to scrape/compute for ${tech.name}:`, error);
-      techResults.push({ tech, row, cellRange, error });
-      continue;
-    }
-
-    const result = { tech, row, cellRange, ...scraped };
-    if (dryRun) {
-      console.log(`  [DRY RUN] would write ${scraped.finalTotal.toFixed(2)} to ${cellRange}`);
-    } else {
-      try {
-        await writeCellValue(auth, spreadsheetId, cellRange, scraped.finalTotal.toFixed(2));
-        result.wrote = true;
-        console.log(`  wrote ${scraped.finalTotal.toFixed(2)} to ${cellRange}`);
-      } catch (writeError) {
-        console.error(`  FAILED to write to ${cellRange}:`, writeError);
-        result.writeError = writeError;
-      }
-    }
+    const result = await processOneTech(page, target, tech, opts);
+    if (result.error) retryQueue.push(tech);
     techResults.push(result);
+  }
+
+  for (const tech of retryQueue) {
+    console.log(`\nRetrying ${tech.name} (${tech.code}) after the rest of the run...`);
+    const retryResult = await processOneTech(page, target, tech, opts);
+    const index = techResults.findIndex((r) => r.tech === tech);
+    techResults[index] = retryResult;
   }
 
   return techResults;
@@ -95,6 +118,11 @@ async function main() {
   const timeZone = process.env.BUSINESS_TIMEZONE || 'America/Denver';
   const dryRun = process.env.DRY_RUN === 'true';
   const headless = process.env.HEADLESS !== 'false';
+  // Testing-only override: pretend "now" is this instant instead of the real current time,
+  // so a specific weekday's behavior can be exercised without waiting for the calendar to
+  // cooperate (e.g. SIMULATE_NOW=2026-08-22T12:00:00 to test as if today were a Saturday).
+  // Never set this for a real scheduled run.
+  const now = process.env.SIMULATE_NOW ? new Date(process.env.SIMULATE_NOW) : new Date();
 
   let target;
   let techResults = [];
@@ -102,7 +130,7 @@ async function main() {
   let createdSpreadsheetName = null;
 
   try {
-    target = computeMixSheetTarget(new Date(), timeZone);
+    target = computeMixSheetTarget(now, timeZone);
     console.log(
       `Recording ${dateLabelFor(target)} -> ${target.spreadsheetNamePattern} / ` +
         `"${target.sheetTabNameNeedle}" / row ${target.row} col ${target.column}`

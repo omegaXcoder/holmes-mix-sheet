@@ -39,7 +39,37 @@ async function selectSavedFilter(page, filterName) {
   await page.locator('#screenViewTitleSpan').click();
   const item = page.locator('div.screenViewSelection', { hasText: filterName });
   await item.waitFor({ state: 'visible' });
-  await item.click();
+  try {
+    await item.click();
+  } catch (err) {
+    if (process.env.DEBUG_SCREENSHOTS === 'true') {
+      const fs = require('fs');
+      fs.mkdirSync('debug-screenshots', { recursive: true });
+      const stamp = `${Date.now()}`;
+      await page.screenshot({ path: `debug-screenshots/click-fail-${stamp}.png`, fullPage: true }).catch(() => {});
+      const dump = await page.evaluate((needle) => {
+        return Array.from(document.querySelectorAll('div.screenViewSelection'))
+          .filter((e) => e.textContent.includes(needle))
+          .map((e) => {
+            const r = e.getBoundingClientRect();
+            const cs = getComputedStyle(e);
+            return {
+              text: e.textContent.trim(),
+              rect: [r.x, r.y, r.width, r.height],
+              display: cs.display,
+              visibility: cs.visibility,
+              opacity: cs.opacity,
+              pointerEvents: cs.pointerEvents,
+              zIndex: cs.zIndex,
+              elementAtCenter: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML?.slice(0, 200),
+            };
+          });
+      }, filterName);
+      fs.writeFileSync(`debug-screenshots/click-fail-${stamp}.json`, JSON.stringify(dump, null, 2));
+      console.error(`  [debug] saved debug-screenshots/click-fail-${stamp}.png/.json`);
+    }
+    throw err;
+  }
 
   // Verify the switch actually took effect by checking the filter title itself, NOT just
   // "did the job count change" - a click that silently fails to register (observed live:
