@@ -2,7 +2,7 @@
   "name": "holmes-mix-sheet-automation",
   "version": "1.0.0",
   "private": true,
-  "description": "Pulls yesterday's per-technician turf sq ft from Service Autopilot and writes reduced totals into the monthly Mix Sheet Google Sheet.",
+  "description": "Pulls today's per-technician turf sq ft from Service Autopilot and writes reduced totals into the monthly Mix Sheet Google Sheet.",
   "main": "src/run.js",
   "scripts": {
     "start": "node src/run.js"

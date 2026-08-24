@@ -112,8 +112,9 @@ async function selectSingleDay(page, year, month1to12, day) {
 
   const cell = page.locator(`#drpMain div.day[time="${targetMs}"]:visible`);
 
-  // Navigate the picker backward if the target month isn't rendered yet (e.g. "yesterday"
-  // fell into the previous month). Bounded retries - this should never need more than 2.
+  // Navigate the picker backward if the target month isn't rendered yet (e.g. a timezone
+  // mismatch between SA's own clock and BUSINESS_TIMEZONE, or a SIMULATE_NOW test date).
+  // Bounded retries - this should never need more than 2.
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (await cell.count()) break;
     await page.locator('#drpMain .prev:visible, #drpMain a[title="Prev"]:visible').first().click();

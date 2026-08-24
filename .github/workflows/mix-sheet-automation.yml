@@ -2,12 +2,19 @@ name: Mix Sheet Automation
 
 on:
   schedule:
-    # 16:00 UTC = 10am MDT (Mountain Daylight Time). This is a fixed UTC time, so during
-    # Mountain Standard Time (winter, UTC-7) this actually runs at 9am local - accepted
-    # as fine per the team, not worth the complexity of a DST-aware dual-schedule.
-    # Day-of-week: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat - Monday (1) is skipped
-    # because the business doesn't run Sundays, so there's nothing for Monday to record.
-    - cron: '0 16 * * 0,2,3,4,5,6'
+    # 8pm Mountain Time, same day, every day except Sunday (nothing runs Sunday, so
+    # there's nothing to record that evening).
+    #
+    # 02:00 UTC = 8pm MDT (Mountain Daylight Time, UTC-6). This is a fixed UTC time, not
+    # DST-aware, so during Mountain Standard Time (winter, UTC-7) this actually runs at
+    # 7pm local - accepted as fine, same tradeoff as before.
+    #
+    # IMPORTANT: 8pm local crosses midnight UTC, landing on the NEXT UTC calendar day - so
+    # the day-of-week to skip is NOT the UTC day matching "Sunday". Business Sunday 8pm
+    # MDT = Monday 02:00 UTC, so the UTC day-of-week that must be skipped is Monday (1).
+    # Day-of-week: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat - this list (0,2,3,4,5,6) is
+    # every day EXCEPT Monday in UTC terms, which is every business day EXCEPT Sunday.
+    - cron: '0 2 * * 0,2,3,4,5,6'
   workflow_dispatch:
     inputs:
       dry_run:

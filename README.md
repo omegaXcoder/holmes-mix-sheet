@@ -1,8 +1,9 @@
 # Holmes Mix Sheet Automation
 
-Each run: logs into Service Autopilot, reads yesterday's jobs for each fert/pest technician,
-reduces the turf sq ft total per the rules in `src/config.js`, and writes the result into
-the correct cell of the current month's Mix Sheet Google Sheet.
+Each run: logs into Service Autopilot, reads that same day's jobs for each fert/pest
+technician (runs in the evening, after the day's work is done), reduces the turf sq ft
+total per the rules in `src/config.js`, and writes the result into the correct cell of the
+current month's Mix Sheet Google Sheet.
 
 ## One-time setup
 
@@ -128,7 +129,9 @@ date-driven conditional formatting rather than assuming from calendar math alone
   4; each subsequent day's block starts 6 rows later (Tuesday 10, Wednesday 16, Thursday 22,
   Friday 28, Saturday 34).
 - The "Sq Feet Per Tech" column is column C.
-- There is no Sunday row - if "yesterday" is a Sunday the script throws rather than guessing.
+- There is no Sunday row - if today is a Sunday the script throws rather than guessing (the
+  schedule already skips Sunday entirely - see "Running on a schedule" below - so this is
+  mainly a safety net for a manual/dispatch run).
 
 If the sheet template ever changes (rows inserted/removed, techs reordered, a new tab
 naming scheme), update `src/mixSheetTarget.js` and `src/config.js` accordingly - these
@@ -166,10 +169,11 @@ Roughly in order of how likely each is to actually break something:
 7. **ASP.NET WebForms login.** Login is a classic full-postback form; everything after is
    an AJAX SPA. If SA changes the login page to also be SPA-driven, the
    `waitForNavigation` after clicking Login will need to become a different wait strategy.
-8. **Business timezone assumption.** All "yesterday" / week-of-month math is anchored to
-   `BUSINESS_TIMEZONE` (`America/Denver` by default) specifically to avoid UTC-vs-local
+8. **Business timezone assumption.** All "what day is it" / week-of-month math is anchored
+   to `BUSINESS_TIMEZONE` (`America/Denver` by default) specifically to avoid UTC-vs-local
    off-by-one-day bugs. If this ever runs from a scheduler in a different timezone context,
-   double check this still resolves correctly around midnight.
+   double check this still resolves correctly, especially since it now runs in the evening
+   (closer to the UTC date rollover than the old next-morning schedule was).
 9. **Duplicate DOM ids on the Dispatch Board.** It's not just the date-picker calendar that
    gets duplicated - `#drpSaveButton` also exists twice (a hidden "Close" copy alongside the
    live "Refresh" one). Any new selector added here should be checked for this same pattern
@@ -202,12 +206,22 @@ hardcoded in source. Keep both out of version control.
 
 ## Running on a schedule (GitHub Actions)
 
-`.github/workflows/mix-sheet-automation.yml` runs this automatically at 16:00 UTC (10am
-MDT) every day except Monday - the business doesn't run Sundays, so there'd be nothing for
-a Monday run to record. This is a fixed UTC time, not DST-aware, so it drifts to 9am local
-during Mountain Standard Time (winter) - accepted as fine rather than adding a second
-DST-aware schedule. It can also be triggered manually from the **Actions** tab (with an
-optional dry-run checkbox) for testing.
+`.github/workflows/mix-sheet-automation.yml` runs this automatically at 8pm MDT (Mountain
+Daylight Time) every day except Sunday - the business doesn't run Sundays, so there'd be
+nothing for that evening's run to record. This is a fixed UTC time, not DST-aware, so it
+drifts to 7pm local during Mountain Standard Time (winter) - accepted as fine rather than
+adding a second DST-aware schedule.
+
+The cron entry itself is `0 2 * * 0,2,3,4,5,6` (02:00 UTC) - worth understanding why those
+numbers don't look like "skip Sunday" at a glance: 8pm Mountain time crosses midnight UTC,
+landing on the *next* UTC calendar day. Business Sunday 8pm MDT is Monday 02:00 UTC, so the
+day-of-week actually being skipped is Monday (`1`) in UTC terms - `0,2,3,4,5,6` is every
+day except UTC-Monday, which works out to every business day except Sunday. If this ever
+needs to change, recompute this carefully rather than assuming the UTC day-of-week matches
+the business day-of-week - it doesn't, because of that midnight crossing.
+
+It can also be triggered manually from the **Actions** tab (with an optional dry-run
+checkbox) for testing.
 
 The workflow reads everything from **repository secrets** rather than committing `.env` -
 add these under **Settings > Secrets and variables > Actions > New repository secret**:
