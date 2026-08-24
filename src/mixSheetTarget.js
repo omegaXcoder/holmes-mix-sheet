@@ -1,6 +1,7 @@
 // Figures out WHICH monthly spreadsheet, which "Wk/N Mix" tab, and which row block
-// correspond to TODAY (the date this whole automation is always recording data for - it
-// runs in the evening, after the day's work is done, not the next morning).
+// correspond to TOMORROW (the date this whole automation is always recording data for - it
+// runs the evening before, pulling each tech's SCHEDULED jobs for the next day so the mix
+// sheet is ready ahead of time, not auditing completed work after the fact).
 //
 // Mix Sheet layout, confirmed live on the July 2026 sheet (see README):
 //   - Each weekday block is 4 tech rows + 1 totals row + 1 blank row = 6 rows.
@@ -27,13 +28,17 @@ function getPartsInTimeZone(date, timeZone) {
   return { year: Number(map.year), month: Number(map.month), day: Number(map.day) };
 }
 
-// Returns today's date info (in the business timezone) plus everything needed to locate
+// Returns tomorrow's date info (in the business timezone) plus everything needed to locate
 // its cell in the Mix Sheet.
 function computeMixSheetTarget(now, timeZone) {
   const nowParts = getPartsInTimeZone(now, timeZone);
-  const y = nowParts.year;
-  const m = nowParts.month; // 1-12
-  const d = nowParts.day;
+  // Anchor "today" at UTC noon so adding a day never crosses a DST boundary weirdly.
+  const todayUtcNoon = Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12);
+  const tomorrowUtcNoon = todayUtcNoon + 24 * 60 * 60 * 1000;
+  const tomorrow = new Date(tomorrowUtcNoon);
+  const y = tomorrow.getUTCFullYear();
+  const m = tomorrow.getUTCMonth() + 1; // 1-12
+  const d = tomorrow.getUTCDate();
 
   const dow1 = new Date(Date.UTC(y, m - 1, 1)).getUTCDay(); // 0=Sun..6=Sat
   const day1MondayIndex = (dow1 + 6) % 7; // 0=Mon..6=Sun
@@ -46,7 +51,7 @@ function computeMixSheetTarget(now, timeZone) {
 
   if (weekdayIndex === 6) {
     throw new Error(
-      `Today (${y}-${m}-${d}) is a Sunday - the Mix Sheet has no Sunday row. Nothing to record.`
+      `Tomorrow (${y}-${m}-${d}) is a Sunday - the Mix Sheet has no Sunday row. Nothing to record.`
     );
   }
 

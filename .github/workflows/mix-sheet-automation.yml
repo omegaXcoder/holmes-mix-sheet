@@ -2,19 +2,24 @@ name: Mix Sheet Automation
 
 on:
   schedule:
-    # 8pm Mountain Time, same day, every day except Sunday (nothing runs Sunday, so
-    # there's nothing to record that evening).
+    # Runs the evening BEFORE the day it records - 8pm Mountain Time pulls each tech's
+    # SCHEDULED jobs for the next day, so the mix sheet is ready ahead of time. Skips the
+    # evening whose target (tomorrow) would be a Sunday - i.e. skips Saturday evening,
+    # since Saturday's "tomorrow" is Sunday and the sheet has no Sunday row.
     #
     # 02:00 UTC = 8pm MDT (Mountain Daylight Time, UTC-6). This is a fixed UTC time, not
     # DST-aware, so during Mountain Standard Time (winter, UTC-7) this actually runs at
     # 7pm local - accepted as fine, same tradeoff as before.
     #
-    # IMPORTANT: 8pm local crosses midnight UTC, landing on the NEXT UTC calendar day - so
-    # the day-of-week to skip is NOT the UTC day matching "Sunday". Business Sunday 8pm
-    # MDT = Monday 02:00 UTC, so the UTC day-of-week that must be skipped is Monday (1).
-    # Day-of-week: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat - this list (0,2,3,4,5,6) is
-    # every day EXCEPT Monday in UTC terms, which is every business day EXCEPT Sunday.
-    - cron: '0 2 * * 0,2,3,4,5,6'
+    # IMPORTANT: 8pm local crosses midnight UTC, landing on the NEXT UTC calendar day, so
+    # the day-of-week to skip is NOT simply "Saturday" in UTC terms either - it happens to
+    # line up this time (business Saturday 8pm MDT = UTC Sunday 02:00), but don't assume
+    # that pattern holds if this schedule changes again - recompute it explicitly, the way
+    # this was verified: for each business day, add 6 hours to 20:00 that day and check
+    # what UTC day-of-week results.
+    # Day-of-week: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat - this list (1,2,3,4,5,6) is
+    # every day EXCEPT Sunday in UTC terms, which is every business evening EXCEPT Saturday.
+    - cron: '0 2 * * 1,2,3,4,5,6'
   workflow_dispatch:
     inputs:
       dry_run:
