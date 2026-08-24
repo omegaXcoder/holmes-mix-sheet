@@ -4,14 +4,26 @@
 //  1. The saved filter names ("AUTOMATION - mix sheet review - <Tech>") must exist and
 //     match exactly (case-sensitive as typed in SA) - if someone renames/deletes one of
 //     these saved views, that tech's run will time out waiting for the filter to appear.
-//  2. This is a Knockout.js SPA panel, not classic postbacks - after selecting a filter or
-//     date we verify the filter title / date box actually reflect the new selection before
-//     proceeding (not just "did something change"), because a click can silently fail to
-//     register (observed live) and leave the grid showing a DIFFERENT tech's or day's data
-//     with no error. That happened for real: a Harris->Nate filter switch silently failed
-//     and Nate's row got written with Harris's numbers. Both checks now throw loudly
-//     instead of swallowing the timeout. If SA changes the "N Jobs Total" header wording
-//     this final readiness wait needs updating too.
+//  2. This is a Knockout.js SPA panel, not classic postbacks - selecting a filter or date
+//     has to survive TWO distinct failure modes, both found live and both silent (no
+//     exception, just wrong data):
+//       a) The click itself silently fails to register, leaving the PREVIOUS filter/date
+//          applied. Caught by verifying the filter title / date box control itself now
+//          shows the new selection.
+//       b) The control updates correctly (client-side, near-instant) but the grid's own
+//          data hasn't finished its AJAX refresh yet, so reading rows immediately after
+//          returns the PREVIOUS selection's data even though the title/date box are
+//          already correct. Caught by additionally waiting for the Totals row's grand
+//          total (CustomField1Total) to actually change from its value before the
+//          switch - far more reliable than waiting for the job count to change, since two
+//          different techs/days can coincidentally share a count but essentially never
+//          share this decimal total to the cent.
+//     Both failure modes have hit in production-equivalent testing: (a) a Harris->Nate
+//     filter switch scraped Harris's data twice under Nate's name; (b) a same-page
+//     date-only change scraped the prior day's data even though the date box already
+//     showed the new date. Every check throws loudly now instead of swallowing a timeout.
+//     If SA changes the "N Jobs Total" header wording or the CustomField1Total binding,
+//     these waits need updating.
 //  3. The date-range widget renders TWO copies of itself in the DOM (a live one and a
 //     hidden dialog-only one) - every selector below is scoped to #drpMain and/or uses
 //     Playwright's :visible pseudo-class to avoid grabbing the hidden copy.
@@ -35,7 +47,19 @@ async function login(page, email, password) {
   ]);
 }
 
+// The Totals row's aggregate turf-sq-ft label (data-bind="text: CustomField1Total") - used
+// as the "did the grid actually finish refreshing" signal below. Far more reliable than
+// waiting for the job COUNT to change or for "any Jobs Total text" to exist: two different
+// techs/days can coincidentally share a job count, but this decimal total matching to the
+// exact cent across genuinely different data essentially never happens in practice.
+async function getGrandTotalText(page) {
+  return page.evaluate(
+    () => document.querySelector('[data-bind*="CustomField1Total"]')?.textContent?.trim() ?? null
+  );
+}
+
 async function selectSavedFilter(page, filterName) {
+  const beforeTotal = await getGrandTotalText(page);
   await page.locator('#screenViewTitleSpan').click();
   const item = page.locator('div.screenViewSelection', { hasText: filterName });
   await item.waitFor({ state: 'visible' });
@@ -89,13 +113,24 @@ async function selectSavedFilter(page, filterName) {
       );
     });
 
-  // The grid itself reloads via AJAX after the title updates - give it a moment to finish
-  // rather than racing straight into reading rows.
-  await page.waitForFunction(
-    () => Array.from(document.querySelectorAll('*')).some((e) => /^\d+ Jobs Total$/.test((e.textContent || '').trim())),
-    null,
-    { timeout: 15000 }
-  );
+  // The title updating is a client-side, near-instant change - it does NOT mean the grid's
+  // underlying data has finished its own AJAX refresh yet. Reading rows too early silently
+  // returns the PREVIOUS filter's data with no error (found live: verified the title/date
+  // controls were both already correct, yet the scraped totals matched the prior
+  // selection's real numbers exactly, to the cent). So wait for the grand total itself to
+  // actually change, not just for "some Jobs Total text" to exist (which can already be
+  // true from the stale grid).
+  await page
+    .waitForFunction((prev) => {
+      const el = document.querySelector('[data-bind*="CustomField1Total"]');
+      return el && el.textContent.trim() !== prev;
+    }, beforeTotal, { timeout: 20000 })
+    .catch(() => {
+      throw new Error(
+        `Filter switch to "${filterName}" title updated, but the grid's total never changed ` +
+          `from "${beforeTotal}" after 20s - it's likely still showing stale data.`
+      );
+    });
 }
 
 // Selects the exact given calendar date as a single-day range (start === end) and applies
@@ -103,6 +138,7 @@ async function selectSavedFilter(page, filterName) {
 // timestamp, computed here via the SAME `new Date(y, m, d).getTime()` the page itself
 // uses to stamp those cells, which sidesteps any timezone ambiguity.
 async function selectSingleDay(page, year, month1to12, day) {
+  const beforeTotal = await getGrandTotalText(page);
   await page.locator('#dispatchBoardDateRange').click();
 
   const targetMs = await page.evaluate(
@@ -147,11 +183,20 @@ async function selectSingleDay(page, year, month1to12, day) {
       );
     });
 
-  await page.waitForFunction(
-    () => Array.from(document.querySelectorAll('*')).some((e) => /^\d+ Jobs Total$/.test((e.textContent || '').trim())),
-    null,
-    { timeout: 15000 }
-  );
+  // Same staleness risk as the filter switch above: the date box updates instantly, but
+  // the grid's own AJAX refresh can lag behind it - wait for the grand total to actually
+  // change before trusting the grid, not just for the date box or "some total" to exist.
+  await page
+    .waitForFunction((prev) => {
+      const el = document.querySelector('[data-bind*="CustomField1Total"]');
+      return el && el.textContent.trim() !== prev;
+    }, beforeTotal, { timeout: 20000 })
+    .catch(() => {
+      throw new Error(
+        `Date selection for ${expected} took effect in the date box, but the grid's total ` +
+          `never changed from "${beforeTotal}" after 20s - it's likely still showing the wrong day's data.`
+      );
+    });
 }
 
 // Pulls every job row's Service name, turf sq ft (CustomField1), and scheduling note

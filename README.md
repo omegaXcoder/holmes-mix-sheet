@@ -1,9 +1,10 @@
 # Holmes Mix Sheet Automation
 
-Each run: logs into Service Autopilot, reads that same day's jobs for each fert/pest
-technician (runs in the evening, after the day's work is done), reduces the turf sq ft
-total per the rules in `src/config.js`, and writes the result into the correct cell of the
-current month's Mix Sheet Google Sheet.
+Each run: logs into Service Autopilot, reads each fert/pest technician's SCHEDULED jobs for
+the next day (runs the evening before, so the mix sheet is ready ahead of time rather than
+auditing completed work after the fact), reduces the turf sq ft total per the rules in
+`src/config.js`, and writes the result into the correct cell of the current month's Mix
+Sheet Google Sheet.
 
 ## One-time setup
 
@@ -129,9 +130,9 @@ date-driven conditional formatting rather than assuming from calendar math alone
   4; each subsequent day's block starts 6 rows later (Tuesday 10, Wednesday 16, Thursday 22,
   Friday 28, Saturday 34).
 - The "Sq Feet Per Tech" column is column C.
-- There is no Sunday row - if today is a Sunday the script throws rather than guessing (the
-  schedule already skips Sunday entirely - see "Running on a schedule" below - so this is
-  mainly a safety net for a manual/dispatch run).
+- There is no Sunday row - if tomorrow is a Sunday the script throws rather than guessing
+  (the schedule already skips the Saturday-evening run that would target Sunday - see
+  "Running on a schedule" below - so this is mainly a safety net for a manual/dispatch run).
 
 If the sheet template ever changes (rows inserted/removed, techs reordered, a new tab
 naming scheme), update `src/mixSheetTarget.js` and `src/config.js` accordingly - these
@@ -142,43 +143,58 @@ what we observed.
 
 Roughly in order of how likely each is to actually break something:
 
-1. **Saved filter names in SA.** `AUTOMATION - mix sheet review - <Tech>` must exist under
+1. **Stale grid data after a filter/date change looks identical to success.** The single
+   most dangerous failure mode found so far - not a crash, a silent wrong answer. Selecting
+   a filter or date updates its on-screen control (title text / date box) near-instantly,
+   client-side, but the grid's own AJAX data refresh can lag behind that by a noticeable
+   moment. Reading rows in that gap returns the PREVIOUS filter's or day's data with no
+   error at all - found live: switching from Aug 24 to Aug 25 left the date box correctly
+   showing Aug 25, yet the scraped totals matched Aug 24's real numbers exactly, to the
+   cent. Both `selectSavedFilter` and `selectSingleDay` now additionally wait for the
+   Totals row's grand total (`CustomField1Total`) to actually change from its value before
+   the switch, and throw if it doesn't within 20s - far more reliable than waiting for the
+   job count to change, since two different techs/days can coincidentally share a count but
+   essentially never share this decimal total to the cent. If this check ever throws in
+   practice where the total genuinely was supposed to stay the same (e.g. a tech with
+   identical totals two days running), that's a rare false alarm worth knowing about, but
+   the alternative - silently writing the wrong day's numbers - is much worse.
+2. **Saved filter names in SA.** `AUTOMATION - mix sheet review - <Tech>` must exist under
    that exact name for each tech. If renamed/deleted, that tech's run hangs waiting for the
    filter option to appear (10s timeout, then throws).
-2. **Service name matching.** Reduction logic is "no 'fert' in the name -> reduce", with
+3. **Service name matching.** Reduction logic is "no 'fert' in the name -> reduce", with
    "contains 'free'" always overriding that to reduce regardless (needed because some free
    follow-up services are catalogued under a category label that itself contains "fert",
    e.g. "Lawn Fertilizing & Weed Control:Free Follow Up Weed Control"), plus a
    spring-seeding-note carve-out for lawn fert 1-2 of 7 (see `src/config.js` for the full
    reasoning). If Service Autopilot service names change, this may over- or under-reduce
    silently - there's no built-in alerting for "this service name looks new/unexpected."
-3. **Google Sheet template stability.** Row/column numbers in `mixSheetTarget.js` are
+4. **Google Sheet template stability.** Row/column numbers in `mixSheetTarget.js` are
    hardcoded from observing the live sheet, not computed from headers. A structural change
    to the sheet (inserted row, reordered techs) silently writes to the wrong cell.
-4. **Knockout data model field names** (`Service`, `CustomField1`,
+5. **Knockout data model field names** (`Service`, `CustomField1`,
    `InternalSchedulingNotes`) - confirmed live 2026-07-24. An SA platform upgrade could
    rename these.
-5. **Date-picker DOM duplication.** The date range widget renders a second, hidden copy of
+6. **Date-picker DOM duplication.** The date range widget renders a second, hidden copy of
    itself (used for an edit-row dialog elsewhere on the page). Every date selector is scoped
    to `#drpMain` and/or `:visible` to avoid grabbing the wrong copy - if SA adds a third
    copy or changes the wrapper ID, this needs revisiting.
-6. **Spreadsheet-per-month lookup.** `ensureMonthlySpreadsheet` creates the month's
+7. **Spreadsheet-per-month lookup.** `ensureMonthlySpreadsheet` creates the month's
    spreadsheet from the template if it's missing (see "Automatic monthly sheet creation"
    above), but still throws if the *year* folder is missing (e.g. no "Mix Sheets 27'"
    folder exists yet come January 2027) or if more than one file matches the target month.
-7. **ASP.NET WebForms login.** Login is a classic full-postback form; everything after is
+8. **ASP.NET WebForms login.** Login is a classic full-postback form; everything after is
    an AJAX SPA. If SA changes the login page to also be SPA-driven, the
    `waitForNavigation` after clicking Login will need to become a different wait strategy.
-8. **Business timezone assumption.** All "what day is it" / week-of-month math is anchored
+9. **Business timezone assumption.** All "what day is it" / week-of-month math is anchored
    to `BUSINESS_TIMEZONE` (`America/Denver` by default) specifically to avoid UTC-vs-local
    off-by-one-day bugs. If this ever runs from a scheduler in a different timezone context,
    double check this still resolves correctly, especially since it now runs in the evening
    (closer to the UTC date rollover than the old next-morning schedule was).
-9. **Duplicate DOM ids on the Dispatch Board.** It's not just the date-picker calendar that
-   gets duplicated - `#drpSaveButton` also exists twice (a hidden "Close" copy alongside the
-   live "Refresh" one). Any new selector added here should be checked for this same pattern
-   (`:visible` + `.first()`) before assuming a single match.
-10. **chrome.exe failing to launch on some Windows machines.** On the machine this was
+10. **Duplicate DOM ids on the Dispatch Board.** It's not just the date-picker calendar that
+    gets duplicated - `#drpSaveButton` also exists twice (a hidden "Close" copy alongside the
+    live "Refresh" one). Any new selector added here should be checked for this same pattern
+    (`:visible` + `.first()`) before assuming a single match.
+11. **chrome.exe failing to launch on some Windows machines.** On the machine this was
     built on, the full `chrome.exe` Playwright installs fails with a Windows-level "side-by-
     side configuration is incorrect" error (unrelated to this code - `chrome.exe --version`
     fails the same way run standalone). The separate `chrome-headless-shell` binary
@@ -188,7 +204,7 @@ Roughly in order of how likely each is to actually break something:
     `chrome.exe` - if it fails the same way, that's a machine-level issue to fix separately
     (try reinstalling the Visual C++ Redistributable, or `npx playwright install chromium
     --force`), not something to work around in code.
-11. **Intermittent "element is not stable/visible" on the very first interaction of a fresh
+12. **Intermittent "element is not stable/visible" on the very first interaction of a fresh
     browser.** Only ever hit whichever tech runs first (always David, since `TECHS` order is
     fixed), and never recurs later in the same run - looks tied to the browser having just
     launched, but the exact root cause wasn't pinned down (tried waiting for the page's
@@ -207,18 +223,20 @@ hardcoded in source. Keep both out of version control.
 ## Running on a schedule (GitHub Actions)
 
 `.github/workflows/mix-sheet-automation.yml` runs this automatically at 8pm MDT (Mountain
-Daylight Time) every day except Sunday - the business doesn't run Sundays, so there'd be
-nothing for that evening's run to record. This is a fixed UTC time, not DST-aware, so it
-drifts to 7pm local during Mountain Standard Time (winter) - accepted as fine rather than
-adding a second DST-aware schedule.
+Daylight Time) every evening EXCEPT Saturday - it pulls each tech's *scheduled* jobs for
+the next day, so a Saturday-evening run would target Sunday, and the sheet has no Sunday
+row. This is a fixed UTC time, not DST-aware, so it drifts to 7pm local during Mountain
+Standard Time (winter) - accepted as fine rather than adding a second DST-aware schedule.
 
-The cron entry itself is `0 2 * * 0,2,3,4,5,6` (02:00 UTC) - worth understanding why those
-numbers don't look like "skip Sunday" at a glance: 8pm Mountain time crosses midnight UTC,
-landing on the *next* UTC calendar day. Business Sunday 8pm MDT is Monday 02:00 UTC, so the
-day-of-week actually being skipped is Monday (`1`) in UTC terms - `0,2,3,4,5,6` is every
-day except UTC-Monday, which works out to every business day except Sunday. If this ever
-needs to change, recompute this carefully rather than assuming the UTC day-of-week matches
-the business day-of-week - it doesn't, because of that midnight crossing.
+The cron entry itself is `0 2 * * 1,2,3,4,5,6` (02:00 UTC) - worth understanding why those
+numbers don't obviously say "skip Saturday": 8pm Mountain time crosses midnight UTC,
+landing on the *next* UTC calendar day. Business Saturday 8pm MDT is Sunday 02:00 UTC, so
+the day-of-week actually being skipped is Sunday (`0`) in UTC terms - `1,2,3,4,5,6` is
+every day except UTC-Sunday, which works out to every business evening except Saturday.
+This happens to look like "just skip Sunday", but that's a coincidence of this particular
+schedule, not a rule - if the time or skip day ever changes again, recompute this
+explicitly (for each business day, add 6 hours to 20:00 that day and check what UTC
+day-of-week results) rather than assuming the pattern holds.
 
 It can also be triggered manually from the **Actions** tab (with an optional dry-run
 checkbox) for testing.
