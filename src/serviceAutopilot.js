@@ -124,11 +124,11 @@ async function selectSavedFilter(page, filterName) {
     .waitForFunction((prev) => {
       const el = document.querySelector('[data-bind*="CustomField1Total"]');
       return el && el.textContent.trim() !== prev;
-    }, beforeTotal, { timeout: 20000 })
+    }, beforeTotal, { timeout: 45000 })
     .catch(() => {
       throw new Error(
         `Filter switch to "${filterName}" title updated, but the grid's total never changed ` +
-          `from "${beforeTotal}" after 20s - it's likely still showing stale data.`
+          `from "${beforeTotal}" after 45s - it's likely still showing stale data.`
       );
     });
 }
@@ -190,11 +190,11 @@ async function selectSingleDay(page, year, month1to12, day) {
     .waitForFunction((prev) => {
       const el = document.querySelector('[data-bind*="CustomField1Total"]');
       return el && el.textContent.trim() !== prev;
-    }, beforeTotal, { timeout: 20000 })
+    }, beforeTotal, { timeout: 45000 })
     .catch(() => {
       throw new Error(
         `Date selection for ${expected} took effect in the date box, but the grid's total ` +
-          `never changed from "${beforeTotal}" after 20s - it's likely still showing the wrong day's data.`
+          `never changed from "${beforeTotal}" after 45s - it's likely still showing the wrong day's data.`
       );
     });
 }

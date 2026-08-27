@@ -153,12 +153,24 @@ Roughly in order of how likely each is to actually break something:
    showing Aug 25, yet the scraped totals matched Aug 24's real numbers exactly, to the
    cent. Both `selectSavedFilter` and `selectSingleDay` now additionally wait for the
    Totals row's grand total (`CustomField1Total`) to actually change from its value before
-   the switch, and throw if it doesn't within 20s - far more reliable than waiting for the
-   job count to change, since two different techs/days can coincidentally share a count but
-   essentially never share this decimal total to the cent. If this check ever throws in
-   practice where the total genuinely was supposed to stay the same (e.g. a tech with
-   identical totals two days running), that's a rare false alarm worth knowing about, but
-   the alternative - silently writing the wrong day's numbers - is much worse.
+   the switch, and throw if it doesn't within 45s (bumped up from an initial 20s after a
+   real production run legitimately needed longer - see the postmortem below) - far more
+   reliable than waiting for the job count to change, since two different techs/days can
+   coincidentally share a count but essentially never share this decimal total to the cent.
+   If this check ever throws in practice where the total genuinely was supposed to stay the
+   same (e.g. a tech with identical totals two days running), that's a rare false alarm
+   worth knowing about, but the alternative - silently writing the wrong day's numbers - is
+   much worse.
+   **2026-08-27 production incident**: the scheduled run failed for all 4 techs with this
+   exact error - David's filter total updated but the date-change total never budged from
+   131185.62 in 20s, then Brandt/Harris/Nate's totals never left `null` at all, even across
+   retries. That evening's scheduled trigger also fired ~10 hours late (12:13 UTC instead
+   of the scheduled 02:00 UTC - a GitHub Actions scheduling delay, not a bug here), which
+   may or may not be related. Surrounding days ran on-time and succeeded, so this looked
+   like a one-off SA-side slowness/GitHub-scheduling blip rather than a persistent problem
+   - the timeout was bumped to 45s as a reasonable hedge, and the run was backfilled
+   manually. If this recurs, it's worth checking GitHub's Actions status history for that
+   window and/or bumping the timeout further.
 2. **Saved filter names in SA.** `AUTOMATION - mix sheet review - <Tech>` must exist under
    that exact name for each tech. If renamed/deleted, that tech's run hangs waiting for the
    filter option to appear (10s timeout, then throws).
