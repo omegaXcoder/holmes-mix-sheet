@@ -70,6 +70,62 @@ This only creates the spreadsheet itself, not a missing *year* folder (e.g. Janu
 throws if more than one spreadsheet matches the target month (e.g. a stray duplicate) -
 that's ambiguous and needs a human to resolve, same as before.
 
+### 3a-bis. Drive storage quota / monthly sheet creation
+
+**The failure this section fixes** (hit live on 2026-08-31, the first run that needed to
+create "SEPTEMBER 2026 Mix Sheet"): the template copy fails with
+
+> GaxiosError: The user's Drive storage quota has been exceeded. (reason: storageQuotaExceeded)
+
+This is **not** anyone's Drive being full. As of April 2025, Google gives service accounts
+**0 bytes** of Drive storage, so a service account can no longer *own* files. Copying the
+template into a regular My Drive folder makes the service account the owner of the copy -
+instantly over its 0-byte quota. Writing values into *existing* sheets is unaffected (no
+new file is created); only the once-a-month "create this month's sheet" step breaks.
+
+Two ways to fix it - pick ONE:
+
+**Option A - move the Mix Sheets folder into a Shared Drive (recommended).** Files in a
+Shared Drive are owned by the drive itself, not by whoever created them, so the quota rule
+never applies. The code already passes `supportsAllDrives` on every Drive call, so no code
+or configuration change is needed beyond the move:
+
+1. In Google Drive (as a user on the Workspace plan - Shared Drives require Business
+   Starter or above), create a Shared Drive, e.g. "Holmes Mix Sheets".
+2. Move the top-level **Mix Sheets** folder (with its year subfolders and the template)
+   into it. Moving folders into a Shared Drive may require a Workspace admin, depending on
+   the domain's sharing settings.
+3. Add the service account's `client_email` as a **Content manager** member of the Shared
+   Drive (the old folder-level share doesn't follow the files into the shared drive
+   reliably - a drive-level membership does).
+4. Verify `MIX_SHEETS_FOLDER_ID` and `MIX_SHEET_TEMPLATE_ID` still match - IDs normally
+   survive the move, but open the folder/template in the browser and compare the IDs in
+   the URL against the workflow file, and update the workflow env values if they changed.
+
+**Option B - domain-wide delegation (if a Shared Drive isn't an option).** The service
+account impersonates a real Workspace user, so new monthly sheets are created as - and
+owned by - that user:
+
+1. Find the service account's **Client ID** (numeric, not the email): Google Cloud Console
+   > IAM & Admin > Service Accounts > your account > "Unique ID".
+2. In the **Google Workspace Admin console** (admin.google.com, requires super admin on
+   holmesutah.com or wherever the sheets live): **Security > Access and data control > API
+   controls > Domain-wide delegation > Add new**. Paste the Client ID and grant exactly
+   these scopes (comma-separated):
+   `https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/drive`
+3. Set `GOOGLE_IMPERSONATE_USER` to the email of a user who has edit access to the Mix
+   Sheets folder (e.g. `madison@holmesutah.com`) - in `.env` locally, and as a
+   **repository variable** (Settings > Secrets and variables > Actions > Variables tab -
+   it's just an email, not a secret) for the GitHub Actions run.
+
+Note: with impersonation on, ALL Drive/Sheets calls act as that user, so it's their access
+(not the service account's share) that matters. Impersonation only works for Workspace
+accounts on the domain that granted the delegation - not for plain @gmail.com accounts.
+
+If neither option is set up and the quota error hits again, the script now fails with a
+message explaining all of this instead of the raw Google error, and the failure email
+carries that explanation.
+
 ### 3b. Email notifications
 
 Every run - success or failure - sends a summary email to `NOTIFY_EMAIL_TO` with the
@@ -171,6 +227,25 @@ Roughly in order of how likely each is to actually break something:
    - the timeout was bumped to 45s as a reasonable hedge, and the run was backfilled
    manually. If this recurs, it's worth checking GitHub's Actions status history for that
    window and/or bumping the timeout further.
+   **2026-08-28 incident + re-diagnosis of the above**: the run recording Saturday
+   2026-08-29 failed for all 4 techs with the same guard, and this time the real cause was
+   found: the target day had ZERO scheduled jobs. An empty day renders no Totals row at
+   all, so the "wait for the grand total to change" check could never succeed - the total
+   read `null` forever. And because SA persists the selected date across page loads within
+   a session, one empty target day poisoned every subsequent tech's scrape too: their
+   fresh page loads started out already showing the empty day ("never changed from null"),
+   including all retries. The 2026-08-27 incident above has this exact signature in its
+   log (first tech stuck at a real number after the date change, everyone after stuck at
+   null) and was almost certainly this same blind spot, not SA slowness or the GitHub
+   scheduling delay. Fixed in `waitForGridRefresh` (`src/serviceAutopilot.js`): on
+   timeout, the grid's final state is inspected, and a stable, coherent empty state (zero
+   job rows + a literal "0 Jobs Total" header + missing/zero total) is accepted as a
+   legitimately empty day - the run records 0.00, which is the truth, and the summary
+   email calls out any zero-job tech explicitly so a human can sanity-check it. Anything
+   else on timeout still throws as stale data, exactly as before. Known residual risk: a
+   refresh slower than the full 45s timeout on a day that genuinely has jobs, while the
+   grid shows a coherent empty state throughout, would record 0.00 instead of failing -
+   the email's zero-jobs note is the audit hook for that case.
 2. **Saved filter names in SA.** `AUTOMATION - mix sheet review - <Tech>` must exist under
    that exact name for each tech. If renamed/deleted, that tech's run hangs waiting for the
    filter option to appear (10s timeout, then throws).
@@ -195,6 +270,9 @@ Roughly in order of how likely each is to actually break something:
    spreadsheet from the template if it's missing (see "Automatic monthly sheet creation"
    above), but still throws if the *year* folder is missing (e.g. no "Mix Sheets 27'"
    folder exists yet come January 2027) or if more than one file matches the target month.
+   Creating the sheet also requires either a Shared Drive or domain-wide delegation -
+   service accounts can't own files in a regular My Drive anymore (0-byte quota since
+   April 2025; hit live 2026-08-31) - see "Drive storage quota / monthly sheet creation".
 8. **ASP.NET WebForms login.** Login is a classic full-postback form; everything after is
    an AJAX SPA. If SA changes the login page to also be SPA-driven, the
    `waitForNavigation` after clicking Login will need to become a different wait strategy.
@@ -276,3 +354,10 @@ secret set`. Requires the [GitHub CLI](https://cli.github.com/) installed and
 
 Everything else (folder ID, timezone, notify-to address, SMTP host/port) is non-sensitive
 and hardcoded directly in the workflow file - edit it there if any of those change.
+
+One optional value comes from a repository **variable** (Settings > Secrets and variables >
+Actions > **Variables** tab) rather than a secret, since it's just an email address:
+
+| Variable name | Value |
+| --- | --- |
+| `GOOGLE_IMPERSONATE_USER` | Workspace user the service account impersonates when creating a new month's sheet (only needed with the domain-wide delegation setup - see "Drive storage quota / monthly sheet creation"; leave unset when using a Shared Drive) |

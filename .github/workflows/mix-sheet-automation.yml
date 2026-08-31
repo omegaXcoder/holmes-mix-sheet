@@ -51,6 +51,11 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_KEY_PATH: ./service-account-key.json
           MIX_SHEETS_FOLDER_ID: 1KsCqKKnZOTAJbkXRf80ZT1JLF3ul-pzN
           MIX_SHEET_TEMPLATE_ID: 1g8E39SjoRwQUH-mmUUf0F7TMLUX7KC8cOVyxwKyX3bE
+          # Optional (repository variable, not a secret - it's just an email address).
+          # Only needed if the Mix Sheets folder is in a regular My Drive, in which case
+          # creating a new month's sheet requires domain-wide delegation - see README
+          # "Drive storage quota / monthly sheet creation". Empty = no impersonation.
+          GOOGLE_IMPERSONATE_USER: ${{ vars.GOOGLE_IMPERSONATE_USER || '' }}
           BUSINESS_TIMEZONE: America/Denver
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           HEADLESS: 'true'

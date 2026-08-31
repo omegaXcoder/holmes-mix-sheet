@@ -58,6 +58,92 @@ async function getGrandTotalText(page) {
   );
 }
 
+// How long to wait for the grid's AJAX refresh to land after a filter/date change. A real
+// production run has legitimately needed >20s (see README fragile point #1) - keep generous.
+const GRID_REFRESH_TIMEOUT_MS = 45000;
+
+// Snapshot of everything waitForGridRefresh uses to judge whether the refresh landed.
+async function getGridState(page) {
+  return page.evaluate(() => {
+    const totalEl = document.querySelector('[data-bind*="CustomField1Total"]');
+    return {
+      total: totalEl ? totalEl.textContent.trim() : null,
+      rowCount: document.querySelectorAll('tr[id^="RowID"]').length,
+      zeroJobsHeader: Array.from(document.querySelectorAll('*')).some(
+        (e) => /^0 Jobs Total$/.test((e.textContent || '').trim())
+      ),
+    };
+  });
+}
+
+// Waits for the grid's AJAX refresh after a filter/date change. "The grand total changed
+// from its pre-change value" is the primary success signal (see fragility note #2b), but
+// it has a blind spot found live on 2026-08-28 (run recording Saturday 2026-08-29): a day
+// with ZERO scheduled jobs renders no Totals row at all, so the total reads null forever
+// and the old logic threw for every tech. Worse, SA persists the selected date across page
+// loads within the session, so one empty target day poisoned every later tech's scrape too
+// - their fresh page loads started out already showing the empty day, hence a whole run of
+// "never changed from null" failures including all retries. The 2026-08-27 "SA slowness"
+// incident in the README has this exact signature in its log (first tech stuck at a real
+// number after the date change, everyone after stuck at null) and was almost certainly
+// this same blind spot, not slowness.
+//
+// So on timeout, instead of throwing blindly, inspect what the grid actually shows: a
+// COHERENT empty state (zero job rows AND a literal "0 Jobs Total" header AND a missing or
+// zero grand total), confirmed stable across two checks 2s apart, is accepted as a
+// legitimately empty day - the caller scrapes zero rows and records 0.00, which is the
+// truth. Anything else (rows still present, the old total still showing) still throws as
+// stale data, same as before.
+//
+// Residual risk, accepted deliberately: if the target day genuinely HAS jobs but the
+// refresh takes longer than the full timeout while the grid shows a coherent empty state
+// the whole time, this records 0.00 instead of failing. The summary email calls out
+// zero-job days explicitly so a human can sanity-check them - the alternative
+// (hard-failing every genuinely empty day) is what took out all four techs on 2026-08-28.
+async function waitForGridRefresh(page, beforeTotal, actionDescription) {
+  try {
+    await page.waitForFunction(
+      (prev) => {
+        const el = document.querySelector('[data-bind*="CustomField1Total"]');
+        return el && el.textContent.trim() !== prev;
+      },
+      beforeTotal,
+      { timeout: GRID_REFRESH_TIMEOUT_MS }
+    );
+    return; // total changed - refresh landed with data
+  } catch (err) {
+    // Timed out - fall through to judge the grid's final state instead of failing blindly.
+  }
+
+  const isCoherentlyEmpty = (state) =>
+    state.rowCount === 0 &&
+    state.zeroJobsHeader &&
+    (!state.total || parseFloat(state.total) === 0);
+
+  const state = await getGridState(page);
+  if (isCoherentlyEmpty(state)) {
+    // Double-check 2s later so a mid-refresh transient (grid cleared, data not yet
+    // re-rendered) right at the inspection instant can't masquerade as an empty day.
+    await page.waitForTimeout(2000);
+    const stateAgain = await getGridState(page);
+    if (isCoherentlyEmpty(stateAgain)) {
+      console.log(
+        `  ${actionDescription}: grid shows a stable, coherent empty day (0 jobs) - ` +
+          'accepting as legitimately empty rather than stale.'
+      );
+      return;
+    }
+  }
+
+  throw new Error(
+    `${actionDescription} took effect in its control, but the grid's total never changed ` +
+      `from "${beforeTotal}" after ${GRID_REFRESH_TIMEOUT_MS / 1000}s, and the grid doesn't ` +
+      `look like a legitimately empty day (job rows: ${state.rowCount}, total: ` +
+      `"${state.total}", "0 Jobs Total" header present: ${state.zeroJobsHeader}) - it's ` +
+      'likely still showing stale data.'
+  );
+}
+
 async function selectSavedFilter(page, filterName) {
   const beforeTotal = await getGrandTotalText(page);
   await page.locator('#screenViewTitleSpan').click();
@@ -118,19 +204,9 @@ async function selectSavedFilter(page, filterName) {
   // returns the PREVIOUS filter's data with no error (found live: verified the title/date
   // controls were both already correct, yet the scraped totals matched the prior
   // selection's real numbers exactly, to the cent). So wait for the grand total itself to
-  // actually change, not just for "some Jobs Total text" to exist (which can already be
-  // true from the stale grid).
-  await page
-    .waitForFunction((prev) => {
-      const el = document.querySelector('[data-bind*="CustomField1Total"]');
-      return el && el.textContent.trim() !== prev;
-    }, beforeTotal, { timeout: 45000 })
-    .catch(() => {
-      throw new Error(
-        `Filter switch to "${filterName}" title updated, but the grid's total never changed ` +
-          `from "${beforeTotal}" after 45s - it's likely still showing stale data.`
-      );
-    });
+  // actually change - or for a stable, coherent empty grid (a genuinely job-less day never
+  // produces a changed total; see waitForGridRefresh).
+  await waitForGridRefresh(page, beforeTotal, `Filter switch to "${filterName}"`);
 }
 
 // Selects the exact given calendar date as a single-day range (start === end) and applies
@@ -185,18 +261,9 @@ async function selectSingleDay(page, year, month1to12, day) {
 
   // Same staleness risk as the filter switch above: the date box updates instantly, but
   // the grid's own AJAX refresh can lag behind it - wait for the grand total to actually
-  // change before trusting the grid, not just for the date box or "some total" to exist.
-  await page
-    .waitForFunction((prev) => {
-      const el = document.querySelector('[data-bind*="CustomField1Total"]');
-      return el && el.textContent.trim() !== prev;
-    }, beforeTotal, { timeout: 45000 })
-    .catch(() => {
-      throw new Error(
-        `Date selection for ${expected} took effect in the date box, but the grid's total ` +
-          `never changed from "${beforeTotal}" after 45s - it's likely still showing the wrong day's data.`
-      );
-    });
+  // change, or for a stable, coherent empty grid (a genuinely job-less day never produces
+  // a changed total; see waitForGridRefresh).
+  await waitForGridRefresh(page, beforeTotal, `Date selection for ${expected}`);
 }
 
 // Pulls every job row's Service name, turf sq ft (CustomField1), and scheduling note

@@ -65,6 +65,13 @@ function buildText({ dateLabel, techResults, fatalError, createdSpreadsheetName 
         : `  [DRY RUN] would write ${r.finalTotal.toFixed(2)} to ${r.cellRange}`
     );
 
+    if (!r.jobs.length) {
+      lines.push(
+        '  NOTE: zero jobs were found for this day - 0.00 reflects an empty schedule. ' +
+          'Worth a quick sanity check that the day really has no scheduled work.'
+      );
+    }
+
     if (r.reductions.length) {
       lines.push('  Sq ft removed from total (these jobs were subtracted):');
       r.reductions.forEach((job) => lines.push(formatJob(job)));
@@ -161,6 +168,16 @@ function buildHtml({ dateLabel, techResults, fatalError, createdSpreadsheetName 
       `<table style="${TABLE_STYLE}"><thead><tr>` +
         `${th('Tech')}${th('Jobs')}${th('Raw Total')}${th('Reduced')}${th('Final')}${th('Cell')}${th('Status')}` +
         `</tr></thead><tbody>${summaryRows}</tbody></table>`
+    );
+  }
+
+  const zeroJobTechs = techResults.filter((r) => !r.error && !r.jobs.length);
+  if (zeroJobTechs.length) {
+    parts.push(
+      `<p style="color: #8a6d00;"><strong>Note:</strong> zero jobs were found for ` +
+        `${escapeHtml(zeroJobTechs.map((r) => r.tech.name).join(', '))} - the 0.00 recorded ` +
+        `reflects an empty schedule. Worth a quick sanity check that the day really has no ` +
+        `scheduled work.</p>`
     );
   }
 

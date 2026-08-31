@@ -1,12 +1,27 @@
 const { google } = require('googleapis');
 
-function getAuth(keyPath) {
+// impersonateUser (optional): a real Workspace user's email to act as via domain-wide
+// delegation. Needed when the Mix Sheets folder lives in a regular My Drive: service
+// accounts have 0 bytes of Drive storage (Google policy change, April 2025) and therefore
+// can't OWN new files, so the monthly template copy fails with storageQuotaExceeded unless
+// the copy is created AS a real user (who then owns it) or the folder lives in a Shared
+// Drive (where files are owned by the drive, not the creator). See README "Drive storage
+// quota / monthly sheet creation".
+function getAuth(keyPath, impersonateUser) {
   return new google.auth.GoogleAuth({
     keyFile: keyPath,
     // Full drive scope (not drive.readonly) - creating each new month's spreadsheet from
     // the template requires write access, not just browsing.
     scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'],
+    ...(impersonateUser ? { clientOptions: { subject: impersonateUser } } : {}),
   });
+}
+
+function isStorageQuotaError(error) {
+  return (
+    (error.errors || []).some((e) => e.reason === 'storageQuotaExceeded') ||
+    /storage quota/i.test(error.message || '')
+  );
 }
 
 const DRIVE_LIST_DEFAULTS = {
@@ -61,11 +76,30 @@ async function createMonthlySpreadsheetFromTemplate(auth, { templateId, yearFold
   const drive = google.drive({ version: 'v3', auth });
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const copyRes = await drive.files.copy({
-    fileId: templateId,
-    supportsAllDrives: true,
-    requestBody: { name: fileName, parents: [yearFolderId] },
-  });
+  let copyRes;
+  try {
+    copyRes = await drive.files.copy({
+      fileId: templateId,
+      supportsAllDrives: true,
+      requestBody: { name: fileName, parents: [yearFolderId] },
+    });
+  } catch (error) {
+    if (isStorageQuotaError(error)) {
+      throw new Error(
+        `Copying the template to create "${fileName}" failed with Google's ` +
+          `"storage quota exceeded" error. This is NOT a full-disk problem: service ` +
+          `accounts have 0 bytes of Drive storage (Google policy change, April 2025), so ` +
+          `the bot can no longer OWN new files, and copying the template into a regular ` +
+          `My Drive folder makes the bot the owner. Fix one of two ways - see README ` +
+          `"Drive storage quota / monthly sheet creation": (1) move the Mix Sheets folder ` +
+          `into a Google Workspace Shared Drive (files there are owned by the drive, no ` +
+          `code change needed), or (2) set GOOGLE_IMPERSONATE_USER to a real Workspace ` +
+          `user's email and grant the service account domain-wide delegation, so the copy ` +
+          `is created as (and owned by) that user. Original error: ${error.message}`
+      );
+    }
+    throw error;
+  }
   const newSpreadsheetId = copyRes.data.id;
 
   const meta = await sheets.spreadsheets.get({

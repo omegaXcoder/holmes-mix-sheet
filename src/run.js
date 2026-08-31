@@ -115,6 +115,11 @@ async function main() {
   const keyPath = requireEnv('GOOGLE_SERVICE_ACCOUNT_KEY_PATH');
   const folderId = requireEnv('MIX_SHEETS_FOLDER_ID');
   const templateId = requireEnv('MIX_SHEET_TEMPLATE_ID');
+  // Optional - only needed if the Mix Sheets folder is in a regular My Drive (not a
+  // Shared Drive): a Workspace user email the service account impersonates via
+  // domain-wide delegation so new monthly sheets are owned by that user instead of the
+  // quota-less service account. See README "Drive storage quota / monthly sheet creation".
+  const impersonateUser = process.env.GOOGLE_IMPERSONATE_USER || undefined;
   const timeZone = process.env.BUSINESS_TIMEZONE || 'America/Denver';
   const dryRun = process.env.DRY_RUN === 'true';
   const headless = process.env.HEADLESS !== 'false';
@@ -136,7 +141,7 @@ async function main() {
         `"${target.sheetTabNameNeedle}" / row ${target.row} col ${target.column}`
     );
 
-    const auth = getAuth(keyPath);
+    const auth = getAuth(keyPath, impersonateUser);
     const yearFolderId = await findYearSubfolderId(auth, folderId, target.yearShort);
     const { spreadsheetId, created } = await ensureMonthlySpreadsheet(auth, {
       yearFolderId,
