@@ -52,72 +52,107 @@ async function login(page, email, password) {
 // waiting for the job COUNT to change or for "any Jobs Total text" to exist: two different
 // techs/days can coincidentally share a job count, but this decimal total matching to the
 // exact cent across genuinely different data essentially never happens in practice.
-async function getGrandTotalText(page) {
-  return page.evaluate(
-    () => document.querySelector('[data-bind*="CustomField1Total"]')?.textContent?.trim() ?? null
-  );
-}
-
 // How long to wait for the grid's AJAX refresh to land after a filter/date change. A real
 // production run has legitimately needed >20s (see README fragile point #1) - keep generous.
 const GRID_REFRESH_TIMEOUT_MS = 45000;
 
-// Snapshot of everything waitForGridRefresh uses to judge whether the refresh landed.
-async function getGridState(page) {
+// Marks every current job-row node (and the grand-total node, if one exists) with a
+// data-pre-refresh attribute and returns a snapshot of the pre-change grid. When the
+// grid's AJAX refresh lands, Knockout re-renders the rows from brand-new data objects, so
+// every marked node gets replaced/removed - which makes "no marked nodes remain" a refresh
+// signal that works even when the refreshed view renders no Totals row at all (found live
+// on the run recording 2026-09-02: a sparse day with a single job per tech renders job
+// rows but NO CustomField1Total element, so the original "wait for the total to change"
+// signal could never fire).
+async function captureGridBeforeChange(page) {
   return page.evaluate(() => {
+    let marked = 0;
+    document.querySelectorAll('tr[id^="RowID"]').forEach((r) => {
+      r.setAttribute('data-pre-refresh', '1');
+      marked += 1;
+    });
     const totalEl = document.querySelector('[data-bind*="CustomField1Total"]');
+    if (totalEl) {
+      totalEl.setAttribute('data-pre-refresh', '1');
+      marked += 1;
+    }
     return {
       total: totalEl ? totalEl.textContent.trim() : null,
       rowCount: document.querySelectorAll('tr[id^="RowID"]').length,
-      zeroJobsHeader: Array.from(document.querySelectorAll('*')).some(
-        (e) => /^0 Jobs Total$/.test((e.textContent || '').trim())
-      ),
+      marked,
     };
   });
 }
 
-// Waits for the grid's AJAX refresh after a filter/date change. "The grand total changed
-// from its pre-change value" is the primary success signal (see fragility note #2b), but
-// it has a blind spot found live on 2026-08-28 (run recording Saturday 2026-08-29): a day
-// with ZERO scheduled jobs renders no Totals row at all, so the total reads null forever
-// and the old logic threw for every tech. Worse, SA persists the selected date across page
-// loads within the session, so one empty target day poisoned every later tech's scrape too
-// - their fresh page loads started out already showing the empty day, hence a whole run of
-// "never changed from null" failures including all retries. The 2026-08-27 "SA slowness"
-// incident in the README has this exact signature in its log (first tech stuck at a real
-// number after the date change, everyone after stuck at null) and was almost certainly
-// this same blind spot, not slowness.
+// Snapshot used by waitForGridRefresh's timeout fallback and error diagnostics.
+async function getGridState(page) {
+  return page.evaluate(() => {
+    const totalEl = document.querySelector('[data-bind*="CustomField1Total"]');
+    const headerEl = Array.from(document.querySelectorAll('*')).find((e) =>
+      /^\d+ Jobs Total$/.test((e.textContent || '').trim())
+    );
+    return {
+      total: totalEl ? totalEl.textContent.trim() : null,
+      rowCount: document.querySelectorAll('tr[id^="RowID"]').length,
+      jobsHeader: headerEl ? headerEl.textContent.trim() : null,
+      markedRemnants: document.querySelectorAll('[data-pre-refresh]').length,
+    };
+  });
+}
+
+// Waits for the grid's AJAX refresh after a filter/date change. This has been through
+// three generations, each fixing a blind spot found in production:
 //
-// So on timeout, instead of throwing blindly, inspect what the grid actually shows: a
-// COHERENT empty state (zero job rows AND a literal "0 Jobs Total" header AND a missing or
-// zero grand total), confirmed stable across two checks 2s apart, is accepted as a
-// legitimately empty day - the caller scrapes zero rows and records 0.00, which is the
-// truth. Anything else (rows still present, the old total still showing) still throws as
-// stale data, same as before.
+//  gen 1 - "wait for the grand total to CHANGE" (fragility note #2b). Blind spot, found
+//  live 2026-08-28 (recording Saturday 2026-08-29): a day with ZERO jobs renders no
+//  Totals row, so the total reads null forever and every tech threw. Worse, SA persists
+//  the selected date across page loads within the session, so one empty target day
+//  poisoned every later tech's fresh page load too ("never changed from null", including
+//  all retries). The 2026-08-27 "SA slowness" incident has the identical signature and
+//  was almost certainly the same thing.
 //
-// Residual risk, accepted deliberately: if the target day genuinely HAS jobs but the
-// refresh takes longer than the full timeout while the grid shows a coherent empty state
-// the whole time, this records 0.00 instead of failing. The summary email calls out
-// zero-job days explicitly so a human can sanity-check them - the alternative
-// (hard-failing every genuinely empty day) is what took out all four techs on 2026-08-28.
-async function waitForGridRefresh(page, beforeTotal, actionDescription) {
+//  gen 2 - added "accept a coherent EMPTY grid on timeout". Blind spot, found live the
+//  very next run (recording Wednesday 2026-09-02): a SPARSE day (one job per tech)
+//  renders job rows but STILL no CustomField1Total element - not empty, so the empty
+//  fallback rightly refused it, but the total-changed signal could never fire either.
+//
+//  gen 3 (current) - the primary signal no longer depends on the Totals row existing:
+//  captureGridBeforeChange marks every pre-change row node, and when the AJAX refresh
+//  lands, Knockout re-renders rows from brand-new data objects, replacing the marked
+//  nodes - so "no marked nodes remain" means the refresh landed, whatever the new day
+//  looks like (many jobs, one job, or none). "Total changed" is kept as a secondary
+//  signal (it also covers a hypothetical in-place update that reuses row nodes), plus
+//  "an empty grid gained rows". The stable-coherent-empty timeout fallback stays for the
+//  empty->empty case (nothing marked, nothing to replace).
+//
+// Residual risk, accepted deliberately: an empty->empty transition can't be told apart
+// from a refresh that never arrived, so after the full timeout it's accepted as a real
+// empty day - the summary email calls out zero-job techs so a human can sanity-check.
+async function waitForGridRefresh(page, before, actionDescription) {
   try {
     await page.waitForFunction(
-      (prev) => {
+      ({ prevTotal, hadMarks, prevRowCount }) => {
         const el = document.querySelector('[data-bind*="CustomField1Total"]');
-        return el && el.textContent.trim() !== prev;
+        // (a) the grand total re-rendered with a different value (or newly appeared)
+        if (el && el.textContent.trim() !== prevTotal) return true;
+        // (b) every pre-change node was replaced - the refresh landed, even if the new
+        // view renders no Totals row at all (sparse days) or no rows at all (empty days)
+        if (hadMarks && !document.querySelector('[data-pre-refresh]')) return true;
+        // (c) an empty grid gained rows - unambiguous, no marks needed
+        if (prevRowCount === 0 && document.querySelectorAll('tr[id^="RowID"]').length > 0) return true;
+        return false;
       },
-      beforeTotal,
+      { prevTotal: before.total, hadMarks: before.marked > 0, prevRowCount: before.rowCount },
       { timeout: GRID_REFRESH_TIMEOUT_MS }
     );
-    return; // total changed - refresh landed with data
+    return; // refresh landed
   } catch (err) {
     // Timed out - fall through to judge the grid's final state instead of failing blindly.
   }
 
   const isCoherentlyEmpty = (state) =>
     state.rowCount === 0 &&
-    state.zeroJobsHeader &&
+    state.jobsHeader === '0 Jobs Total' &&
     (!state.total || parseFloat(state.total) === 0);
 
   const state = await getGridState(page);
@@ -136,16 +171,16 @@ async function waitForGridRefresh(page, beforeTotal, actionDescription) {
   }
 
   throw new Error(
-    `${actionDescription} took effect in its control, but the grid's total never changed ` +
-      `from "${beforeTotal}" after ${GRID_REFRESH_TIMEOUT_MS / 1000}s, and the grid doesn't ` +
-      `look like a legitimately empty day (job rows: ${state.rowCount}, total: ` +
-      `"${state.total}", "0 Jobs Total" header present: ${state.zeroJobsHeader}) - it's ` +
-      'likely still showing stale data.'
+    `${actionDescription} took effect in its control, but the grid never showed signs of ` +
+      `a completed refresh after ${GRID_REFRESH_TIMEOUT_MS / 1000}s (grand total before: ` +
+      `"${before.total}", now: "${state.total}"; job rows: ${state.rowCount}; pre-change ` +
+      `marked nodes remaining: ${state.markedRemnants} of ${before.marked}; jobs header: ` +
+      `"${state.jobsHeader}") - it's likely still showing stale data.`
   );
 }
 
 async function selectSavedFilter(page, filterName) {
-  const beforeTotal = await getGrandTotalText(page);
+  const before = await captureGridBeforeChange(page);
   await page.locator('#screenViewTitleSpan').click();
   const item = page.locator('div.screenViewSelection', { hasText: filterName });
   await item.waitFor({ state: 'visible' });
@@ -203,10 +238,9 @@ async function selectSavedFilter(page, filterName) {
   // underlying data has finished its own AJAX refresh yet. Reading rows too early silently
   // returns the PREVIOUS filter's data with no error (found live: verified the title/date
   // controls were both already correct, yet the scraped totals matched the prior
-  // selection's real numbers exactly, to the cent). So wait for the grand total itself to
-  // actually change - or for a stable, coherent empty grid (a genuinely job-less day never
-  // produces a changed total; see waitForGridRefresh).
-  await waitForGridRefresh(page, beforeTotal, `Filter switch to "${filterName}"`);
+  // selection's real numbers exactly, to the cent). So wait for real evidence the grid's
+  // own refresh landed - see waitForGridRefresh for the signals and their history.
+  await waitForGridRefresh(page, before, `Filter switch to "${filterName}"`);
 }
 
 // Selects the exact given calendar date as a single-day range (start === end) and applies
@@ -214,7 +248,7 @@ async function selectSavedFilter(page, filterName) {
 // timestamp, computed here via the SAME `new Date(y, m, d).getTime()` the page itself
 // uses to stamp those cells, which sidesteps any timezone ambiguity.
 async function selectSingleDay(page, year, month1to12, day) {
-  const beforeTotal = await getGrandTotalText(page);
+  const before = await captureGridBeforeChange(page);
   await page.locator('#dispatchBoardDateRange').click();
 
   const targetMs = await page.evaluate(
@@ -260,10 +294,9 @@ async function selectSingleDay(page, year, month1to12, day) {
     });
 
   // Same staleness risk as the filter switch above: the date box updates instantly, but
-  // the grid's own AJAX refresh can lag behind it - wait for the grand total to actually
-  // change, or for a stable, coherent empty grid (a genuinely job-less day never produces
-  // a changed total; see waitForGridRefresh).
-  await waitForGridRefresh(page, beforeTotal, `Date selection for ${expected}`);
+  // the grid's own AJAX refresh can lag behind it - wait for real evidence the refresh
+  // landed; see waitForGridRefresh for the signals and their history.
+  await waitForGridRefresh(page, before, `Date selection for ${expected}`);
 }
 
 // Pulls every job row's Service name, turf sq ft (CustomField1), and scheduling note

@@ -246,6 +246,21 @@ Roughly in order of how likely each is to actually break something:
    refresh slower than the full 45s timeout on a day that genuinely has jobs, while the
    grid shows a coherent empty state throughout, would record 0.00 instead of failing -
    the email's zero-jobs note is the audit hook for that case.
+   **2026-08-31 incident (recording Wednesday 2026-09-02) - a THIRD grid state**: the
+   very next run failed for all 4 techs with a new signature: `job rows: 1, total:
+   "null", "0 Jobs Total" header: false`. A SPARSE day (a single job per tech) renders
+   job rows but NO CustomField1Total element at all - not empty (so the empty-day
+   fallback rightly refused it), but the "wait for the total to change" signal could
+   never fire either, because there is no total to change. Fixed by making the primary
+   refresh signal independent of the Totals row: `captureGridBeforeChange` marks every
+   pre-change row node with a `data-pre-refresh` attribute, and when the grid's AJAX
+   refresh lands, Knockout re-renders the rows from brand-new data objects, replacing
+   every marked node - so "no marked nodes remain" means the refresh landed regardless of
+   what the new day looks like (many jobs, one job, or none). "Total changed" is retained
+   as a secondary signal, and the stable-coherent-empty timeout fallback stays for
+   empty-to-empty transitions (nothing marked, nothing to replace). See
+   `waitForGridRefresh` in `src/serviceAutopilot.js` for the full three-generation
+   history of this guard.
 2. **Saved filter names in SA.** `AUTOMATION - mix sheet review - <Tech>` must exist under
    that exact name for each tech. If renamed/deleted, that tech's run hangs waiting for the
    filter option to appear (10s timeout, then throws).
