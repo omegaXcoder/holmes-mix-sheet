@@ -28,13 +28,15 @@ The script never opens a Google login page - it authenticates as its own robot a
    (it's already covered by `.gitignore`-equivalent handling below; don't commit it anywhere).
 5. Open the JSON file and copy the `client_email` value (looks like
    `mix-sheet-bot@your-project.iam.gserviceaccount.com`).
-6. In Google Drive, right-click the **Mix Sheets** folder > **Share** > paste that email
-   in as an **Editor**. This one share covers every monthly spreadsheet inside the folder,
-   including future months, as long as new sheets are created inside that same folder.
-   Note: the Mix Sheets folder doesn't hold monthly spreadsheets directly - it holds one
-   subfolder per year (e.g. "Mix Sheets 26'" for 2026), and the monthly sheets live inside
-   those. Sharing the top-level Mix Sheets folder covers all of them; you don't need to
-   share each year subfolder separately.
+6. Add that email as a **member of the shared drive** (open the "Drive" shared drive >
+   its name at the top > Manage members > add the email as at least **Content manager**).
+   One membership covers every year subfolder and monthly spreadsheet inside it,
+   including future months. Note: the drive doesn't hold monthly spreadsheets directly at
+   its root - it holds one subfolder per year (e.g. "Mix Sheets 26'" for 2026), and the
+   monthly sheets live inside those. (Historical note: before 2026-09-02 everything lived
+   in a regular My Drive "Mix Sheets" folder shared with the service account as Editor -
+   that stopped working for creating new monthly sheets; see "Drive storage quota /
+   monthly sheet creation" below.)
 
 ### 3. Configure environment
 
@@ -84,6 +86,16 @@ instantly over its 0-byte quota. Writing values into *existing* sheets is unaffe
 new file is created); only the once-a-month "create this month's sheet" step breaks.
 
 Two ways to fix it - pick ONE:
+
+**STATUS: Option A was done on 2026-09-02** - the "Mix Sheets 26'" year folder now lives
+at the root of the "Drive" shared drive (`0AIRkxE8Y7Sr8Uk9PVA`, now the value of
+`MIX_SHEETS_FOLDER_ID` - shared-drive root ids start with `0A`). There is no longer a
+top-level "Mix Sheets" wrapper folder; the shared drive root plays that role, so future
+year folders ("Mix Sheets 27'" etc) should be created directly in the shared drive root.
+Loose end at time of writing: the TEMPLATE was not moved and still sits in the old
+My Drive folder with no share to the service account - move it into the shared drive
+(its ID survives the move; no config change needed) before the first run of a new month
+needs to copy it.
 
 **Option A - move the Mix Sheets folder into a Shared Drive (recommended).** Files in a
 Shared Drive are owned by the drive itself, not by whoever created them, so the quota rule
@@ -174,7 +186,8 @@ this was derived, including double-checking the "current week" tab against the s
 date-driven conditional formatting rather than assuming from calendar math alone.
 
 - Each monthly spreadsheet lives inside a year subfolder (e.g. "Mix Sheets 26'" for 2026)
-  under the top-level Mix Sheets folder, named like `<Month> <Year> Mix Sheet`. Older months
+  directly under the root of the "Drive" shared drive (before 2026-09-02: under a
+  top-level "Mix Sheets" My Drive folder), named like `<Month> <Year> Mix Sheet`. Older months
   use inconsistent naming (e.g. "FILLING MARCH 2026", and 2025's folder drops the "Mix
   Sheet" suffix entirely) - this only matters if the script is ever extended to look back
   at past months.

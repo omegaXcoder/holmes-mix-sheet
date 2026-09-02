@@ -49,7 +49,10 @@ jobs:
           SA_EMAIL: ${{ secrets.SA_EMAIL }}
           SA_PASSWORD: ${{ secrets.SA_PASSWORD }}
           GOOGLE_SERVICE_ACCOUNT_KEY_PATH: ./service-account-key.json
-          MIX_SHEETS_FOLDER_ID: 1KsCqKKnZOTAJbkXRf80ZT1JLF3ul-pzN
+          # The root of the "Drive" SHARED drive (0A... ids are shared-drive roots) - the
+          # year subfolders ("Mix Sheets 26'" etc) live directly in it since the 2026-09-02
+          # migration off My Drive (see README "Drive storage quota / monthly sheet creation").
+          MIX_SHEETS_FOLDER_ID: 0AIRkxE8Y7Sr8Uk9PVA
           MIX_SHEET_TEMPLATE_ID: 1g8E39SjoRwQUH-mmUUf0F7TMLUX7KC8cOVyxwKyX3bE
           # Optional (repository variable, not a secret - it's just an email address).
           # Only needed if the Mix Sheets folder is in a regular My Drive, in which case
