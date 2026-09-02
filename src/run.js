@@ -1,4 +1,5 @@
 require('dotenv').config();
+const fs = require('fs');
 const { chromium } = require('playwright');
 
 const { TECHS, shouldReduceJob } = require('./config');
@@ -140,6 +141,16 @@ async function main() {
       `Recording ${dateLabelFor(target)} -> ${target.spreadsheetNamePattern} / ` +
         `"${target.sheetTabNameNeedle}" / row ${target.row} col ${target.column}`
     );
+
+    // Print which robot identity this run uses - Drive access problems (e.g. "is this
+    // service account actually a member of the shared drive?") are impossible to debug
+    // from the logs without knowing which account was asking.
+    try {
+      const clientEmail = JSON.parse(fs.readFileSync(keyPath, 'utf8')).client_email;
+      console.log(`Google service account: ${clientEmail}${impersonateUser ? ` (impersonating ${impersonateUser})` : ''}`);
+    } catch (keyReadError) {
+      console.warn(`Could not read client_email from ${keyPath}: ${keyReadError.message}`);
+    }
 
     const auth = getAuth(keyPath, impersonateUser);
     const yearFolderId = await findYearSubfolderId(auth, folderId, target.yearShort);

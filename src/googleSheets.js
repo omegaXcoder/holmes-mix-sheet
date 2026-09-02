@@ -30,26 +30,100 @@ const DRIVE_LIST_DEFAULTS = {
   corpora: 'allDrives',
 };
 
-// The top-level "Mix Sheets" folder doesn't hold monthly spreadsheets directly - it holds
-// one subfolder per year (observed live: "Mix Sheets 26'" for 2026, "Mix Sheets 25'" for
-// 2025 - note the trailing apostrophe and 2-digit year). This finds that year's subfolder.
+// Lists the children of a folder, robust to the folder living in a shared drive. The
+// combined 'allDrives' corpus returned NOTHING for the shared drive root in production on
+// 2026-09-02 (run recording 2026-09-03) even though the folder had children - so when it
+// comes back empty, retry scoped to the specific shared drive (corpora 'drive' + driveId,
+// the documented way to list shared drive contents). A shared-drive ROOT's own id doubles
+// as the driveId (they start with "0A"); for a folder deeper in a drive, its driveId is
+// fetched. An empty result after both attempts is returned as-is - the caller decides
+// what empty means.
+async function listFolderChildren(drive, parentId, extraQ) {
+  const q = `'${parentId}' in parents and trashed = false${extraQ ? ` and ${extraQ}` : ''}`;
+  const base = { q, fields: 'files(id, name)', pageSize: 100 };
+
+  let res = await drive.files.list({ ...base, ...DRIVE_LIST_DEFAULTS });
+  let files = res.data.files || [];
+  if (files.length) return files;
+
+  let driveId = null;
+  if (parentId.startsWith('0A')) {
+    driveId = parentId;
+  } else {
+    try {
+      const meta = await drive.files.get({ fileId: parentId, fields: 'driveId', supportsAllDrives: true });
+      driveId = meta.data.driveId || null;
+    } catch (err) {
+      // Can't even read the parent's metadata - fall through and let the empty result
+      // (and the caller's error message) surface the access problem.
+    }
+  }
+  if (!driveId) return files;
+
+  res = await drive.files.list({
+    ...base,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+    corpora: 'drive',
+    driveId,
+  });
+  return res.data.files || [];
+}
+
+// The configured top folder doesn't hold monthly spreadsheets directly - it holds one
+// subfolder per year (observed live: "Mix Sheets 26'" for 2026, "Mix Sheets 25'" for
+// 2025 - note the trailing apostrophe and 2-digit year). Since 2026-09-02 the "top
+// folder" is the root of the "Drive" shared drive. This finds that year's subfolder.
 async function findYearSubfolderId(auth, topFolderId, twoDigitYear) {
   const drive = google.drive({ version: 'v3', auth });
-  const res = await drive.files.list({
-    q: `'${topFolderId}' in parents and trashed = false and mimeType = 'application/vnd.google-apps.folder'`,
+  const yearRegex = new RegExp(`${twoDigitYear}'?$`);
+
+  const folders = (
+    await listFolderChildren(drive, topFolderId, `mimeType = 'application/vnd.google-apps.folder'`)
+  ).filter((f) => yearRegex.test(f.name.trim()));
+  if (folders.length === 1) return folders[0].id;
+  if (folders.length > 1) {
+    throw new Error(
+      `Multiple year subfolders matched "${twoDigitYear}" under ${topFolderId}: ` +
+        `${folders.map((f) => f.name).join(', ')} - ambiguous, needs a human.`
+    );
+  }
+
+  // Nothing visible under the parent. The service account may still have access to the
+  // year folder ITSELF without being able to list its parent (e.g. shared directly on the
+  // subfolder while not being a member of the shared drive) - search everything visible
+  // for a matching "Mix Sheets NN'" folder by name before giving up.
+  const global = await drive.files.list({
+    q: `trashed = false and mimeType = 'application/vnd.google-apps.folder' and name contains 'Mix Sheets'`,
     fields: 'files(id, name)',
     pageSize: 100,
     ...DRIVE_LIST_DEFAULTS,
   });
-  const folders = res.data.files || [];
-  const match = folders.find((f) => f.name.trim().match(new RegExp(`${twoDigitYear}'?$`)));
-  if (!match) {
+  const candidates = (global.data.files || []).filter((f) => yearRegex.test(f.name.trim()));
+  if (candidates.length === 1) {
+    console.log(
+      `Year folder not visible under ${topFolderId} - using "${candidates[0].name}" ` +
+        `(${candidates[0].id}) found by global name search instead. If this folder lives ` +
+        `in a shared drive, add the service account (printed at the top of this log) as a ` +
+        `MEMBER of that shared drive to fix the direct lookup.`
+    );
+    return candidates[0].id;
+  }
+  if (candidates.length > 1) {
     throw new Error(
-      `No year subfolder matching "${twoDigitYear}" found under the Mix Sheets folder. ` +
-        `Found: ${folders.map((f) => f.name).join(', ')}`
+      `No year subfolder visible under ${topFolderId}, and the global name search matched ` +
+        `more than one candidate: ${candidates.map((f) => f.name).join(', ')} - ambiguous, needs a human.`
     );
   }
-  return match.id;
+
+  throw new Error(
+    `No year subfolder matching "${twoDigitYear}" found under folder ${topFolderId}, and ` +
+      `no "Mix Sheets ${twoDigitYear}'" folder is visible to this service account anywhere. ` +
+      `If the folder lives in a shared drive, the service account (its email is printed at ` +
+      `the top of this log) must be added as a MEMBER of that shared drive (Manage members > ` +
+      `Content manager) - a share on an individual subfolder is not enough to list the ` +
+      `drive's root.`
+  );
 }
 
 // Lists every spreadsheet in the given year subfolder whose name matches the given pattern
@@ -57,13 +131,14 @@ async function findYearSubfolderId(auth, topFolderId, twoDigitYear) {
 // means (ensureMonthlySpreadsheet below creates one; other callers might want to just know).
 async function listMonthlySpreadsheetMatches(auth, yearFolderId, namePattern) {
   const drive = google.drive({ version: 'v3', auth });
-  const res = await drive.files.list({
-    q: `'${yearFolderId}' in parents and trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'`,
-    fields: 'files(id, name)',
-    pageSize: 100,
-    ...DRIVE_LIST_DEFAULTS,
-  });
-  const files = res.data.files || [];
+  // Uses the shared-drive-robust helper: a silently empty listing here wouldn't just fail
+  // - ensureMonthlySpreadsheet would conclude the month's sheet doesn't exist and create a
+  // DUPLICATE next to the invisible real one.
+  const files = await listFolderChildren(
+    drive,
+    yearFolderId,
+    `mimeType = 'application/vnd.google-apps.spreadsheet'`
+  );
   return files.filter((f) => namePattern.test(f.name));
 }
 
