@@ -10,6 +10,7 @@ const {
   findYearSubfolderId,
   ensureMonthlySpreadsheet,
   findSheetTabTitle,
+  findTechDayRow,
   writeCellValue,
 } = require('./googleSheets');
 const { sendRunSummaryEmail } = require('./notify');
@@ -43,7 +44,18 @@ function dateLabelFor(target) {
 // can decide what to do with a failure (record it, retry it, etc).
 async function processOneTech(page, target, tech, { auth, spreadsheetId, sheetTitle, dryRun }) {
   console.log(`\n${tech.name} (${tech.code}) - loading ${dateLabelFor(target)}...`);
-  const row = target.row + tech.sheetRowOffset;
+
+  // Resolve this tech's row from the sheet itself (scan column B for their code) rather
+  // than hardcoded offsets - a tech whose row doesn't exist yet (e.g. newly added and the
+  // sheet not restructured) fails loudly HERE, before any scraping, without touching the
+  // other techs.
+  let row;
+  try {
+    row = await findTechDayRow(auth, spreadsheetId, sheetTitle, tech.code, target.weekdayIndex);
+  } catch (error) {
+    console.error(`  FAILED to locate ${tech.name}'s row in the sheet:`, error.message);
+    return { tech, error };
+  }
   const cellRange = cellA1({ ...target, row }, sheetTitle);
 
   let scraped;
@@ -139,7 +151,8 @@ async function main() {
     target = computeMixSheetTarget(now, timeZone);
     console.log(
       `Recording ${dateLabelFor(target)} -> ${target.spreadsheetNamePattern} / ` +
-        `"${target.sheetTabNameNeedle}" / row ${target.row} col ${target.column}`
+        `"${target.sheetTabNameNeedle}" / weekday index ${target.weekdayIndex} / col ${target.column}` +
+        ' (per-tech rows resolved from the sheet)'
     );
 
     // Print which robot identity this run uses - Drive access problems (e.g. "is this

@@ -1,12 +1,18 @@
 // One entry per technician. `filterName` must exactly match the saved Dispatch Board
-// view name in Service Autopilot (Select a Filter dropdown, top-left). `sheetRowOffset`
-// is this tech's row position (0-indexed) within each day's 4-row block in the Mix Sheet
-// "Wk/N Mix" tabs - see README "Mix Sheet layout" for how that maps to real rows.
+// view name in Service Autopilot (Select a Filter dropdown, top-left). `code` must match
+// the tech's row label in column B of the Mix Sheet week tabs (cells look like
+// "F02 (David)") - each tech's exact row is found at runtime by scanning for that code,
+// so adding a tech here also requires their "F0N (Name)" row to exist in every day block
+// of every week tab (see findTechDayRow in googleSheets.js and README "Mix Sheet layout").
 const TECHS = [
-  { code: 'F02', name: 'David', filterName: 'AUTOMATION - mix sheet review - David', sheetRowOffset: 0 },
-  { code: 'F03', name: 'Brandt', filterName: 'AUTOMATION - mix sheet review - Brandt', sheetRowOffset: 1 },
-  { code: 'F04', name: 'Harris', filterName: 'AUTOMATION - mix sheet review - Harris', sheetRowOffset: 2 },
-  { code: 'F05', name: 'Nate', filterName: 'AUTOMATION - mix sheet review - Nate', sheetRowOffset: 3 },
+  { code: 'F02', name: 'David', filterName: 'AUTOMATION - mix sheet review - David' },
+  { code: 'F03', name: 'Brandt', filterName: 'AUTOMATION - mix sheet review - Brandt' },
+  { code: 'F04', name: 'Harris', filterName: 'AUTOMATION - mix sheet review - Harris' },
+  { code: 'F05', name: 'Nate', filterName: 'AUTOMATION - mix sheet review - Nate' },
+  // Added 2026-09-09. Until an "F06 (Holdyn)" row is inserted into each day block of the
+  // week tabs (and the template), Holdyn's runs fail loudly at row lookup while the other
+  // techs keep recording normally.
+  { code: 'F06', name: 'Holdyn', filterName: 'AUTOMATION - mix sheet review - Holdyn' },
 ];
 
 // Services that reduce a job's turf sq ft out of the tech's daily total, confirmed against

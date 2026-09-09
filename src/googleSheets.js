@@ -232,6 +232,65 @@ async function findSheetTabTitle(auth, spreadsheetId, needle) {
   return match;
 }
 
+// Resolves the exact sheet row for one technician on one weekday by scanning column B of
+// the week tab for that tech's code (cells look like "F02 (David)"). Each day block lists
+// every tech once, in weekday order (Mon..Sat), so the (weekdayIndex+1)-th occurrence of
+// a code is that tech's row for that day. Only the FIRST 6 occurrences count - the tab
+// repeats the same codes in a gallons-reconciliation section further down.
+//
+// This replaces the old hardcoded row math (row 4 + 6*weekday + a per-tech offset), which
+// silently wrote to the wrong cell whenever the layout shifted (old README fragile point
+// #4) and couldn't absorb a new technician (Holdyn, added 2026-09) without updating
+// hardcoded numbers in lockstep with a sheet restructure. Now the sheet is the source of
+// truth: a tech with no row in the tab fails loudly here - with the other techs
+// unaffected - instead of writing into the totals row or some other wrong cell.
+async function findTechDayRow(auth, spreadsheetId, sheetTitle, techCode, weekdayIndex) {
+  const sheets = google.sheets({ version: 'v4', auth });
+  const quotedTitle = `'${sheetTitle.replace(/'/g, "''")}'`;
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${quotedTitle}!B1:B120`,
+  });
+  const colB = (res.data.values || []).map((r) => ((r && r[0]) || '').toString().trim().toUpperCase());
+
+  const firstSixRowsFor = (code) => {
+    const rows = [];
+    colB.forEach((value, i) => {
+      if (value.startsWith(code.toUpperCase())) rows.push(i + 1); // 1-based sheet rows
+    });
+    return rows.slice(0, 6);
+  };
+
+  const rows = firstSixRowsFor(techCode);
+  if (rows.length < weekdayIndex + 1) {
+    throw new Error(
+      `Tab "${sheetTitle}" has ${rows.length} row(s) labeled "${techCode}" in column B, ` +
+        `but weekday index ${weekdayIndex} (0=Mon..5=Sat) needs at least ${weekdayIndex + 1}. ` +
+        `If this is a newly added technician, an "${techCode} (Name)" row must be inserted ` +
+        `into every day block of every week tab (and the monthly template, including the ` +
+        `daily totals formulas) before the automation can record them.`
+    );
+  }
+  const row = rows[weekdayIndex];
+
+  // Sanity-check against F02's row for the same day: all techs in a day block sit within
+  // a few rows of each other, so a wildly distant match means the code was found in the
+  // wrong section (e.g. a tech added only to the lower gallons section) - refuse to write
+  // rather than land a number in the wrong place.
+  if (techCode.toUpperCase() !== 'F02') {
+    const anchorRows = firstSixRowsFor('F02');
+    if (anchorRows.length >= weekdayIndex + 1 && Math.abs(row - anchorRows[weekdayIndex]) > 8) {
+      throw new Error(
+        `Row sanity check failed on tab "${sheetTitle}": ${techCode}'s weekday-${weekdayIndex} ` +
+          `row (${row}) is more than 8 rows from F02's (${anchorRows[weekdayIndex]}) - the ` +
+          `day blocks don't line up, so this looks like a layout problem. Refusing to write.`
+      );
+    }
+  }
+
+  return row;
+}
+
 async function writeCellValue(auth, spreadsheetId, a1Range, value) {
   const sheets = google.sheets({ version: 'v4', auth });
   await sheets.spreadsheets.values.update({
@@ -247,5 +306,6 @@ module.exports = {
   findYearSubfolderId,
   ensureMonthlySpreadsheet,
   findSheetTabTitle,
+  findTechDayRow,
   writeCellValue,
 };

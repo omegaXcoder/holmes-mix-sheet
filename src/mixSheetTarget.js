@@ -1,21 +1,21 @@
-// Figures out WHICH monthly spreadsheet, which "Wk/N Mix" tab, and which row block
-// correspond to TOMORROW (the date this whole automation is always recording data for - it
-// runs the evening before, pulling each tech's SCHEDULED jobs for the next day so the mix
-// sheet is ready ahead of time, not auditing completed work after the fact).
+// Figures out WHICH monthly spreadsheet and which "Wk/N Mix" tab correspond to TOMORROW
+// (the date this whole automation is always recording data for - it runs the evening
+// before, pulling each tech's SCHEDULED jobs for the next day so the mix sheet is ready
+// ahead of time, not auditing completed work after the fact).
 //
 // Mix Sheet layout, confirmed live on the July 2026 sheet (see README):
-//   - Each weekday block is 4 tech rows + 1 totals row + 1 blank row = 6 rows.
-//   - Monday's F02 (first tech) row is row 4. Tuesday's is row 10, Wednesday's 16,
-//     Thursday's 22, Friday's 28, Saturday's 34. i.e. row = 4 + 6 * weekdayIndex
-//     (Mon=0 .. Sat=5), and a tech's exact row = that base + TECHS[i].sheetRowOffset.
+//   - Within a week tab, each weekday is a block of one row per tech (labeled
+//     "F0N (Name)" in column B) plus a totals row and a blank spacer. The EXACT row for a
+//     given tech+day is no longer computed here from hardcoded offsets - it's resolved at
+//     runtime by findTechDayRow in googleSheets.js, which scans column B for the tech's
+//     code, so the sheet itself is the source of truth and layout changes (like adding a
+//     technician) don't require code edits.
 //   - The "Sq Feet Per Tech" column is column C.
 //   - Weeks are Monday-Saturday business weeks. Week 1 is the Mon-Sat block that contains
 //     the 1st of the month (so it can start in the previous month, e.g. July 2026's Week 1
 //     starts Monday June 29 because July 1 is a Wednesday) - confirmed live against the
 //     sheet's own "today" conditional-formatting highlight, not assumed.
 const MIX_SHEET_COLUMN = 'C';
-const ROWS_PER_DAY_BLOCK = 6;
-const FIRST_MONDAY_ROW = 4;
 
 function getPartsInTimeZone(date, timeZone) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -66,8 +66,7 @@ function computeMixSheetTarget(now, timeZone) {
     day: d,
     monthName,
     weekNumber,
-    weekdayIndex, // 0=Mon .. 5=Sat
-    row: FIRST_MONDAY_ROW + ROWS_PER_DAY_BLOCK * weekdayIndex,
+    weekdayIndex, // 0=Mon .. 5=Sat - findTechDayRow turns this into an exact row per tech
     column: MIX_SHEET_COLUMN,
     // e.g. "26" - used to find the year's subfolder in Drive (see googleSheets.js)
     yearShort: String(y).slice(-2),

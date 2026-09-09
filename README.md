@@ -200,19 +200,29 @@ date-driven conditional formatting rather than assuming from calendar math alone
   numeric prefix (which shifts as sheets are added/removed).
 - Weeks are Monday-Saturday business weeks. Week 1 is whichever Mon-Sat block contains the
   1st of the month (it can start in the previous month).
-- Within a week's tab, each weekday is a 6-row block: 4 tech rows (David, Brandt, Harris,
-  Nate, in that order) + 1 totals row + 1 blank spacer row. Monday's first tech row is row
-  4; each subsequent day's block starts 6 rows later (Tuesday 10, Wednesday 16, Thursday 22,
-  Friday 28, Saturday 34).
+- Within a week's tab, each weekday is a block of one row per tech (labeled "F0N (Name)"
+  in column B) + 1 totals row + 1 blank spacer row, with the day blocks in Mon..Sat order
+  and a second gallons-reconciliation section (repeating the same tech labels) further
+  down the tab. Since 2026-09-09 each tech's exact row is resolved AT RUNTIME by scanning
+  column B for their code and taking the (weekday+1)-th of the first six occurrences
+  (`findTechDayRow` in `src/googleSheets.js`) - the sheet is the source of truth, so
+  inserting a row for a new tech Just Works once the sheet has it, and a tech with no row
+  yet fails loudly for that tech only instead of writing into the wrong cell.
+  (Historical: the row used to be hardcoded as 4 + 6*weekday + a per-tech offset, which
+  assumed exactly 4 techs forever.)
 - The "Sq Feet Per Tech" column is column C.
 - There is no Sunday row - if tomorrow is a Sunday the script throws rather than guessing
   (the schedule already skips the Saturday-evening run that would target Sunday - see
   "Running on a schedule" below - so this is mainly a safety net for a manual/dispatch run).
 
-If the sheet template ever changes (rows inserted/removed, techs reordered, a new tab
-naming scheme), update `src/mixSheetTarget.js` and `src/config.js` accordingly - these
-numbers are not derived from anything self-describing in the sheet, they're hardcoded from
-what we observed.
+Adding a technician takes two coordinated steps: (1) add them to `TECHS` in
+`src/config.js` (code, name, and their `AUTOMATION - mix sheet review - <Name>` saved
+filter in SA), and (2) insert their "F0N (Name)" row into every day block of every week
+tab in the current month's sheet AND the template ("NEW MASTER 2026 FILL SHEET"),
+making sure each day's totals formula includes the new row. Until step 2 is done, that
+tech's runs fail loudly at row lookup (visible in the audit email) while everyone else
+records normally. Column C and the tab naming scheme are still assumptions - if those
+ever change, update `src/mixSheetTarget.js`.
 
 ## Known fragile points
 
@@ -289,9 +299,14 @@ Roughly in order of how likely each is to actually break something:
    spring-seeding-note carve-out for lawn fert 1-2 of 7 (see `src/config.js` for the full
    reasoning). If Service Autopilot service names change, this may over- or under-reduce
    silently - there's no built-in alerting for "this service name looks new/unexpected."
-4. **Google Sheet template stability.** Row/column numbers in `mixSheetTarget.js` are
-   hardcoded from observing the live sheet, not computed from headers. A structural change
-   to the sheet (inserted row, reordered techs) silently writes to the wrong cell.
+4. **Google Sheet template stability.** Largely mitigated 2026-09-09: each tech's row is
+   now resolved at runtime by scanning column B of the week tab for their "F0N (Name)"
+   label (`findTechDayRow`), with a sanity check that all techs' rows for a day sit close
+   together - so inserted rows and added techs no longer cause silent wrong-cell writes;
+   a tech whose row can't be found (or looks misplaced) fails loudly for that tech only.
+   Still assumed: column C is "Sq Feet Per Tech", the "F0N" labels live in column B, and
+   the first six occurrences of a code are the main section's Mon-Sat rows (the lower
+   gallons section repeats the labels).
 5. **Knockout data model field names** (`Service`, `CustomField1`,
    `InternalSchedulingNotes`) - confirmed live 2026-07-24. An SA platform upgrade could
    rename these.
