@@ -19,7 +19,13 @@ on:
     # what UTC day-of-week results.
     # Day-of-week: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat - this list (1,2,3,4,5,6) is
     # every day EXCEPT Sunday in UTC terms, which is every business evening EXCEPT Saturday.
-    - cron: '0 2 * * 1,2,3,4,5,6'
+    #
+    # Minute 17 (not 0): GitHub's cron is best-effort and on-the-hour slots - especially
+    # 02:00 UTC - are so congested that these runs were observed starting ~5 HOURS late
+    # (12:30-1am MDT). An off-peak minute reduces (does not eliminate) that queueing. The
+    # code side is also hardened: a run that still starts after local midnight records
+    # the correct day anyway (see computeMixSheetTarget in src/mixSheetTarget.js).
+    - cron: '17 2 * * 1,2,3,4,5,6'
   workflow_dispatch:
     inputs:
       dry_run:

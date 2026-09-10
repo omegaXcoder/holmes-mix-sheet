@@ -367,7 +367,18 @@ the next day, so a Saturday-evening run would target Sunday, and the sheet has n
 row. This is a fixed UTC time, not DST-aware, so it drifts to 7pm local during Mountain
 Standard Time (winter) - accepted as fine rather than adding a second DST-aware schedule.
 
-The cron entry itself is `0 2 * * 1,2,3,4,5,6` (02:00 UTC) - worth understanding why those
+**GitHub's cron is best-effort, and delays are large in practice.** These runs were
+observed starting ~5 hours late night after night (a 8pm MDT schedule starting 12:30-1am
+MDT) because on-the-hour UTC slots are heavily congested - the schedule now uses minute
+17 to reduce that. More importantly, a delayed run used to record the WRONG DAY: past
+local midnight, "tomorrow" points a day too far, which silently skipped 2026-08-31 and
+2026-09-10. `computeMixSheetTarget` now targets "the date of the next morning" instead -
+a run starting before noon local is treated as a late fire of the previous evening and
+records TODAY - so a delayed run lands on the correct day regardless. Side effect worth
+knowing: a MANUAL run triggered before noon records the current day (handy for
+backfilling a skipped morning); triggered noon or later it records tomorrow, as always.
+
+The cron entry itself is `17 2 * * 1,2,3,4,5,6` (02:17 UTC) - worth understanding why those
 numbers don't obviously say "skip Saturday": 8pm Mountain time crosses midnight UTC,
 landing on the *next* UTC calendar day. Business Saturday 8pm MDT is Sunday 02:00 UTC, so
 the day-of-week actually being skipped is Sunday (`0`) in UTC terms - `1,2,3,4,5,6` is

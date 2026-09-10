@@ -1,7 +1,8 @@
-// Figures out WHICH monthly spreadsheet and which "Wk/N Mix" tab correspond to TOMORROW
-// (the date this whole automation is always recording data for - it runs the evening
-// before, pulling each tech's SCHEDULED jobs for the next day so the mix sheet is ready
-// ahead of time, not auditing completed work after the fact).
+// Figures out WHICH monthly spreadsheet and which "Wk/N Mix" tab correspond to the date
+// being recorded - nominally TOMORROW (the run fires the evening before, pulling each
+// tech's SCHEDULED jobs for the next day so the mix sheet is ready ahead of time, not
+// auditing completed work after the fact), but see computeMixSheetTarget for how a run
+// delayed past midnight still records the correct day.
 //
 // Mix Sheet layout, confirmed live on the July 2026 sheet (see README):
 //   - Within a week tab, each weekday is a block of one row per tech (labeled
@@ -23,22 +24,46 @@ function getPartsInTimeZone(date, timeZone) {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23', // 0-23, avoiding the "24:xx at midnight" quirk of hour12:false
   }).formatToParts(date);
   const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
-  return { year: Number(map.year), month: Number(map.month), day: Number(map.day) };
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+  };
 }
 
-// Returns tomorrow's date info (in the business timezone) plus everything needed to locate
-// its cell in the Mix Sheet.
+// Returns the target date's info (in the business timezone) plus everything needed to
+// locate its cells in the Mix Sheet.
+//
+// The target is "the date of the NEXT MORNING", not literally "tomorrow". The run is
+// scheduled for the evening before the day it records, but GitHub's cron is best-effort
+// and has fired ~5 hours late in production - past local midnight (observed live: the 8pm
+// MDT schedule regularly starting between 12:30 and 1am MDT). Recording literal
+// "tomorrow" from a past-midnight run skips a day: the 2026-08-31 07:58 UTC run recorded
+// 09-01 and silently left 08-31 blank, and the 2026-09-10 00:53 MDT run recorded 09-11,
+// leaving 09-10 blank. So: before noon local, the run is treated as a late fire of the
+// previous evening and records TODAY; from noon on, it records tomorrow as intended. A
+// manual morning run therefore backfills the current day (usually what a human doing
+// that wants); the log line and audit email always state the exact date recorded.
 function computeMixSheetTarget(now, timeZone) {
   const nowParts = getPartsInTimeZone(now, timeZone);
   // Anchor "today" at UTC noon so adding a day never crosses a DST boundary weirdly.
   const todayUtcNoon = Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12);
-  const tomorrowUtcNoon = todayUtcNoon + 24 * 60 * 60 * 1000;
-  const tomorrow = new Date(tomorrowUtcNoon);
-  const y = tomorrow.getUTCFullYear();
-  const m = tomorrow.getUTCMonth() + 1; // 1-12
-  const d = tomorrow.getUTCDate();
+  const targetUtcNoon = nowParts.hour < 12 ? todayUtcNoon : todayUtcNoon + 24 * 60 * 60 * 1000;
+  if (nowParts.hour < 12) {
+    console.log(
+      `Run started before noon (${String(nowParts.hour).padStart(2, '0')}:xx local) - ` +
+        'treating it as a late fire of the previous evening and recording TODAY, not tomorrow.'
+    );
+  }
+  const targetDate = new Date(targetUtcNoon);
+  const y = targetDate.getUTCFullYear();
+  const m = targetDate.getUTCMonth() + 1; // 1-12
+  const d = targetDate.getUTCDate();
 
   const dow1 = new Date(Date.UTC(y, m - 1, 1)).getUTCDay(); // 0=Sun..6=Sat
   const day1MondayIndex = (dow1 + 6) % 7; // 0=Mon..6=Sun
@@ -51,7 +76,7 @@ function computeMixSheetTarget(now, timeZone) {
 
   if (weekdayIndex === 6) {
     throw new Error(
-      `Tomorrow (${y}-${m}-${d}) is a Sunday - the Mix Sheet has no Sunday row. Nothing to record.`
+      `The target date (${y}-${m}-${d}) is a Sunday - the Mix Sheet has no Sunday row. Nothing to record.`
     );
   }
 
