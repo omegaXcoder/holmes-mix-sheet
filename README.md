@@ -313,7 +313,13 @@ Roughly in order of how likely each is to actually break something:
 6. **Date-picker DOM duplication.** The date range widget renders a second, hidden copy of
    itself (used for an edit-row dialog elsewhere on the page). Every date selector is scoped
    to `#drpMain` and/or `:visible` to avoid grabbing the wrong copy - if SA adds a third
-   copy or changes the wrapper ID, this needs revisiting.
+   copy or changes the wrapper ID, this needs revisiting. Separately (found live
+   2026-09-28, failing all 5 techs): a date in a week shared by two month panels renders
+   TWICE with the same `time` attribute - once as a normal day in its own month's panel
+   and once as a grayed lastMonth/nextMonth overflow day in the adjacent panel - which
+   made a bare strict-mode click ambiguous during month-boundary weeks. `selectSingleDay`
+   now prefers the non-overflow copy and falls back to the first match (same `time` =
+   same date, so either copy selects the same day).
 7. **Spreadsheet-per-month lookup.** `ensureMonthlySpreadsheet` creates the month's
    spreadsheet from the template if it's missing (see "Automatic monthly sheet creation"
    above), but still throws if the *year* folder is missing (e.g. no "Mix Sheets 27'"

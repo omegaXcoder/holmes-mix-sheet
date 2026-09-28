@@ -256,16 +256,27 @@ async function selectSingleDay(page, year, month1to12, day) {
     [year, month1to12, day]
   );
 
-  const cell = page.locator(`#drpMain div.day[time="${targetMs}"]:visible`);
+  const anyCell = page.locator(`#drpMain div.day[time="${targetMs}"]:visible`);
 
   // Navigate the picker backward if the target month isn't rendered yet (e.g. a timezone
   // mismatch between SA's own clock and BUSINESS_TIMEZONE, or a SIMULATE_NOW test date).
   // Bounded retries - this should never need more than 2.
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (await cell.count()) break;
+    if (await anyCell.count()) break;
     await page.locator('#drpMain .prev:visible, #drpMain a[title="Prev"]:visible').first().click();
   }
-  await cell.waitFor({ state: 'visible', timeout: 10000 });
+  await anyCell.first().waitFor({ state: 'visible', timeout: 10000 });
+
+  // A date in a week shared by two month panels renders TWICE with the same `time` value
+  // (found live 2026-09-28: once in September's panel as a normal "toMonth" day and again
+  // in October's panel as a "lastMonth" overflow day - both visible, which is a Playwright
+  // strict-mode violation on a bare click). Identical `time` means identical date, so any
+  // copy selects the same day - prefer a non-overflow cell (overflow copies are classed
+  // lastMonth/nextMonth), fall back to whichever comes first.
+  const nonOverflowCell = page.locator(
+    `#drpMain div.day[time="${targetMs}"]:not(.lastMonth):not(.nextMonth):visible`
+  );
+  const cell = (await nonOverflowCell.count()) > 0 ? nonOverflowCell.first() : anyCell.first();
 
   await cell.click(); // sets range start
   await cell.click(); // collapses range to a single day (start === end)
