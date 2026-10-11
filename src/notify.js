@@ -16,7 +16,10 @@ function getTransport() {
 }
 
 function formatJob(job) {
-  return `    - ${job.client || '(no client name)'} | ${job.service} | ${job.turfSqFt.toFixed(2)} sq ft`;
+  const removed = job.reducedSqFt != null ? job.reducedSqFt : job.turfSqFt;
+  const partial =
+    removed < job.turfSqFt ? ` (partial - of the job's ${job.turfSqFt.toFixed(2)}, per fall seeding note)` : '';
+  return `    - ${job.client || '(no client name)'} | ${job.service} | ${removed.toFixed(2)} sq ft${partial}`;
 }
 
 function statusText(r) {
@@ -107,10 +110,14 @@ function td(text, numeric) {
 function buildReductionsTable(reductions) {
   if (!reductions.length) return '<p style="font-family: Arial, sans-serif; font-size: 13px; margin: 4px 0 16px;">No jobs were reduced out of the total.</p>';
   const rows = reductions
-    .map(
-      (job) =>
-        `<tr>${td(job.client || '(no client name)')}${td(job.service)}${td(job.turfSqFt.toFixed(2), true)}</tr>`
-    )
+    .map((job) => {
+      const removed = job.reducedSqFt != null ? job.reducedSqFt : job.turfSqFt;
+      const removedText =
+        removed < job.turfSqFt
+          ? `${removed.toFixed(2)} of ${job.turfSqFt.toFixed(2)} (fall seeding)`
+          : removed.toFixed(2);
+      return `<tr>${td(job.client || '(no client name)')}${td(job.service)}${td(removedText, true)}</tr>`;
+    })
     .join('');
   return (
     `<table style="${TABLE_STYLE} margin-left: 20px; width: calc(100% - 20px);">` +

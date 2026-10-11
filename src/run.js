@@ -2,7 +2,7 @@ require('dotenv').config();
 const fs = require('fs');
 const { chromium } = require('playwright');
 
-const { TECHS, shouldReduceJob } = require('./config');
+const { TECHS, jobReductionSqFt } = require('./config');
 const { computeMixSheetTarget, cellA1 } = require('./mixSheetTarget');
 const { login, getTechDayJobs } = require('./serviceAutopilot');
 const {
@@ -27,9 +27,13 @@ function computeReducedTotal(jobs) {
   const reductions = [];
   for (const job of jobs) {
     total += job.turfSqFt;
-    if (shouldReduceJob(job.service, job.schedulingNote)) {
-      reduced += job.turfSqFt;
-      reductions.push(job);
+    // May be the whole job or, for a fall-seeding note with an explicit square footage,
+    // just part of it - reductions entries carry `reducedSqFt` so the audit email can
+    // show partial removals as such.
+    const reducedSqFt = jobReductionSqFt(job.service, job.schedulingNote, job.turfSqFt);
+    if (reducedSqFt > 0) {
+      reduced += reducedSqFt;
+      reductions.push({ ...job, reducedSqFt });
     }
   }
   return { total, reduced, finalTotal: total - reduced, reductions };

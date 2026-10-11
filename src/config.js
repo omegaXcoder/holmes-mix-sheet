@@ -50,8 +50,50 @@ function shouldReduceJob(serviceName, schedulingNote) {
   return !svc.includes('fert');
 }
 
+// Fall seeding rule (added 2026-10-11): a scheduling note mentioning "fall seeding 2026"
+// (any 20xx year matches, so this survives into next season) means seeded area must come
+// OUT of the mix even on jobs the rules above would keep (e.g. regular fert visits):
+//   - If the note spells out a square footage, remove exactly that much. Two spellings
+//     are recognized: a number tagged with units anywhere in the note ("5,000 sq ft",
+//     "5000sqft", "3000 sf", "12.5k sq ft", "5000 square feet"), or a bare number
+//     immediately after the phrase ("fall seeding 2026 - 5000", "fall seeding 2026: 5k").
+//   - Otherwise, remove the job's entire square footage.
+// Unrelated numbers elsewhere in the note (dates, "10/12", the year itself) deliberately
+// do NOT count as a square footage - an untagged, non-adjacent number falls through to
+// full removal, which errs on the side of keeping seeded turf out of the tank mix.
+const FALL_SEEDING_REGEX = /fall\s+seeding\s+20\d{2}/i;
+
+// Returns null if the note doesn't mention fall seeding, Infinity for "remove the whole
+// job", or the specific sq ft the note calls out.
+function fallSeedingReductionSqFt(schedulingNote) {
+  const note = schedulingNote || '';
+  if (!FALL_SEEDING_REGEX.test(note)) return null;
+
+  const tagged = note.match(
+    /([\d,]+(?:\.\d+)?)\s*(k)?\s*(?:sq\.?\s*ft\.?|sqft|sf\b|square\s+f(?:ee|oo)t)/i
+  );
+  const afterPhrase = note.match(
+    new RegExp(FALL_SEEDING_REGEX.source + String.raw`[\s:;,\-–]*([\d,]+(?:\.\d+)?)\s*(k)?\b`, 'i')
+  );
+  const m = tagged || afterPhrase;
+  if (!m || !m[1]) return Infinity;
+  const value = parseFloat(m[1].replace(/,/g, '')) * (m[2] ? 1000 : 1);
+  return Number.isFinite(value) && value > 0 ? value : Infinity;
+}
+
+// The single entry point for "how many sq ft does this job remove from the mix?".
+// 0 = the whole job stays in the mix; anything between 0 and turfSqFt is a partial
+// removal (only the fall seeding rule produces those); turfSqFt = full removal.
+function jobReductionSqFt(serviceName, schedulingNote, turfSqFt) {
+  if (shouldReduceJob(serviceName, schedulingNote)) return turfSqFt;
+  const fallSeeding = fallSeedingReductionSqFt(schedulingNote);
+  if (fallSeeding === null) return 0;
+  return Math.min(fallSeeding, turfSqFt);
+}
+
 module.exports = {
   TECHS,
   shouldReduceJob,
+  jobReductionSqFt,
   SPRING_SEEDING_NOTE_PHRASE,
 };
