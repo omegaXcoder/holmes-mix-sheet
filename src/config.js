@@ -31,7 +31,9 @@ const TECHS = [
 //     under a category label that itself contains "fert" (e.g. "Lawn Fertilizing & Weed
 //     Control:Free Follow Up Weed Control"), which would otherwise be wrongly kept in the
 //     total just because of the category prefix, not the actual service performed.
-//   - Never reduce any other service containing "fert" (regular Lawn fert 3-7 of 7,
+//   - ALWAYS reduce any service containing "7 of 7" - the season's final visit comes out
+//     of the mix entirely, fert or not (added 2026-10-15).
+//   - Never reduce any other service containing "fert" (regular Lawn fert 3-6 of 7,
 //     Fert/Pest combos, Fert/Pest/Bait combos, etc).
 const SPRING_SEEDING_FERT_VISITS = ['lawn fert 1 of 7', 'lawn fert 2 of 7'];
 const SPRING_SEEDING_NOTE_PHRASE = 'spring seeding';
@@ -44,6 +46,12 @@ function shouldReduceJob(serviceName, schedulingNote) {
   if (seedingVisit) {
     return note.includes(SPRING_SEEDING_NOTE_PHRASE);
   }
+
+  // The season's final visit ("... 7 of 7" in the Service column) is always reduced out
+  // of the mix entirely, even on fert services the rule below would otherwise keep
+  // (added 2026-10-15). Non-fert "7 of 7" services (e.g. pest 7 of 7) were already
+  // reduced by the no-fert rule; this makes the fert ones match.
+  if (/7\s*of\s*7/.test(svc)) return true;
 
   if (svc.includes('free')) return true;
 
