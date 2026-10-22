@@ -297,8 +297,7 @@ Roughly in order of how likely each is to actually break something:
    follow-up services are catalogued under a category label that itself contains "fert",
    e.g. "Lawn Fertilizing & Weed Control:Free Follow Up Weed Control"), plus a
    spring-seeding-note carve-out for lawn fert 1-2 of 7 (see `src/config.js` for the full
-   reasoning). Added 2026-10-15: any service containing "7 of 7" - the season's final
-   visit - is always fully reduced, fert or not. Added 2026-10-11: a scheduling note mentioning "fall seeding 2026" (any
+   reasoning). Added 2026-10-11: a scheduling note mentioning "fall seeding 2026" (any
    20xx year) removes seeded area from the mix even on jobs the other rules keep - the
    exact amount if the note spells out a square footage ("5,000 sq ft" anywhere in the
    note, or a bare number right after the phrase like "fall seeding 2026 - 5000", with an
